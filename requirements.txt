@@ -1,1 +1,3 @@
-requirements.txt
+telethon
+gitpython
+python-dotenv
