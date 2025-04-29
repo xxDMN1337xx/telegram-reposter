@@ -1,3 +1,4 @@
 telethon
 gitpython
 python-dotenv
+pymorphy2
