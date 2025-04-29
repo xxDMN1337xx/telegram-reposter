@@ -12,3 +12,4 @@ PIN-UP
 VAVADA
 конфа
 CONF
+Partners
