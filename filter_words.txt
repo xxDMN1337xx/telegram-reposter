@@ -1,1 +1,1 @@
-filter_words.txt
+Пишите
