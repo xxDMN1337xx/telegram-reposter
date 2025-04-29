@@ -1,19 +1,30 @@
 import asyncio
 import os
+import pymorphy2
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME, TARGET_CHANNEL
-import pymorphy2
 
 LAST_ID_FILE = 'last_id.txt'
 filter_words = set()
 last_processed_id = 0
-morph = pymorphy2.MorphAnalyzer()
+
+# Создаём морфологический анализатор (рус+укр)
+morph = pymorphy2.MorphAnalyzer(lang='ru')  # pymorphy2-dicts-uk подхватится автоматически
 
 def load_filter_words():
     global filter_words
     if os.path.exists('filter_words.txt'):
         with open('filter_words.txt', 'r', encoding='utf-8') as f:
-            filter_words = set(line.strip().lower() for line in f if line.strip())
+            filter_words.clear()
+            for line in f:
+                word = line.strip().lower()
+                if word:
+                    lemma = morph.parse(word)[0].normal_form
+                    filter_words.add(lemma)
+
+def normalize_text(text):
+    words = text.lower().split()
+    return {morph.parse(word)[0].normal_form for word in words}
 
 def load_last_processed_id():
     global last_processed_id
@@ -27,14 +38,6 @@ def load_last_processed_id():
 def save_last_processed_id(message_id):
     with open(LAST_ID_FILE, 'w') as f:
         f.write(str(message_id))
-
-def normalize_text(text):
-    words = text.split()
-    normalized = set()
-    for word in words:
-        p = morph.parse(word)[0]
-        normalized.add(p.normal_form.lower())
-    return normalized
 
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
@@ -53,11 +56,11 @@ async def main():
         if event.poll:
             return
 
-        message_text = event.raw_text.lower()
-        norm_words = normalize_text(message_text)
+        message_text = event.raw_text or ""
+        normalized_words = normalize_text(message_text)
 
-        if any(fw in norm_words for fw in filter_words):
-            return  # Нашлось совпадение по лемме — фильтруем
+        if filter_words.intersection(normalized_words):
+            return  # Найдено совпадение — фильтруем
 
         if event.is_channel and not event.out:
             await event.forward_to(TARGET_CHANNEL)
