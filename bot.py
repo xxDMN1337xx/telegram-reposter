@@ -2,10 +2,12 @@ import asyncio
 import os
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME, TARGET_CHANNEL
+import pymorphy2
 
 LAST_ID_FILE = 'last_id.txt'
 filter_words = set()
 last_processed_id = 0
+morph = pymorphy2.MorphAnalyzer()
 
 def load_filter_words():
     global filter_words
@@ -26,6 +28,14 @@ def save_last_processed_id(message_id):
     with open(LAST_ID_FILE, 'w') as f:
         f.write(str(message_id))
 
+def normalize_text(text):
+    words = text.split()
+    normalized = set()
+    for word in words:
+        p = morph.parse(word)[0]
+        normalized.add(p.normal_form.lower())
+    return normalized
+
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
@@ -38,15 +48,16 @@ async def main():
         load_filter_words()
 
         if event.id <= last_processed_id:
-            return  # Уже обработали
+            return
 
-        # ❌ Пропустить если это опрос
         if event.poll:
             return
 
         message_text = event.raw_text.lower()
-        if any(word in message_text for word in filter_words):
-            return  # Пропускаем запрещенные сообщения
+        norm_words = normalize_text(message_text)
+
+        if any(fw in norm_words for fw in filter_words):
+            return  # Нашлось совпадение по лемме — фильтруем
 
         if event.is_channel and not event.out:
             await event.forward_to(TARGET_CHANNEL)
