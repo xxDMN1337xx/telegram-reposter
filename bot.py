@@ -40,6 +40,10 @@ async def main():
         if event.id <= last_processed_id:
             return  # Уже обработали
 
+        # ❌ Пропустить если это опрос
+        if event.poll:
+            return
+
         message_text = event.raw_text.lower()
         if any(word in message_text for word in filter_words):
             return  # Пропускаем запрещенные сообщения
