@@ -10,3 +10,5 @@ Trust RDP
 партнерской программы 
 PIN-UP
 VAVADA
+конфа
+CONF
