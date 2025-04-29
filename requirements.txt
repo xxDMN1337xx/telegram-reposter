@@ -2,3 +2,4 @@ telethon
 gitpython
 python-dotenv
 pymorphy2
+pymorphy2-dicts-uk
