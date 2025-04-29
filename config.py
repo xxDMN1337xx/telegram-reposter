@@ -1,6 +1,9 @@
 import os
+from dotenv import load_dotenv
 
-API_ID = int(os.getenv("API_ID"))  # Получи у Telegram
+load_dotenv()  # ← эта строка ОБЯЗАТЕЛЬНА
+
+API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_NAME = os.getenv("SESSION_NAME", "session")
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL")  # id канала, куда репостить
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL")
