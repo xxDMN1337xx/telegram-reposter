@@ -49,6 +49,8 @@ async def main():
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
         load_filter_words()
+        print(f"[LOG] Получено сообщение ID {event.id} из {event.chat_id}: {event.raw_text}")  # 👈 добавь эту строку
+
 
         if event.id <= last_processed_id:
             return
