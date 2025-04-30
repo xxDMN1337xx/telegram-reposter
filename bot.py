@@ -8,8 +8,7 @@ LAST_ID_FILE = 'last_id.txt'
 filter_words = set()
 last_processed_id = 0
 
-# Создаём морфологический анализатор (рус+укр)
-morph = pymorphy2.MorphAnalyzer(lang='ru')  # pymorphy2-dicts-uk подхватится автоматически
+morph = pymorphy2.MorphAnalyzer(lang='ru')
 
 def load_filter_words():
     global filter_words
@@ -49,24 +48,38 @@ async def main():
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
         load_filter_words()
-        print(f"[LOG] Получено сообщение ID {event.id} из {event.chat_id}: {event.raw_text}")  # 👈 добавь эту строку
-
 
         if event.id <= last_processed_id:
+            print(f"[SKIP] Уже обработано ID {event.id}")
             return
 
         if event.poll:
+            print("[SKIP] Это опрос")
             return
 
         message_text = event.raw_text or ""
+        print(f"[LOG] Получено сообщение ID {event.id} из {event.chat_id}: {message_text}")
+
         normalized_words = normalize_text(message_text)
+        print(f"[DEBUG] Леммы сообщения: {normalized_words}")
+        print(f"[DEBUG] Фильтр: {filter_words}")
 
-        if filter_words.intersection(normalized_words):
-            return  # Найдено совпадение — фильтруем
+        # ❌ Временно отключаем фильтр (для отладки)
+        # if filter_words.intersection(normalized_words):
+        #     print("[FILTERED] Совпадение по фильтру — сообщение пропущено")
+        #     return
 
-        if event.is_channel and not event.out:
-            await event.forward_to(TARGET_CHANNEL)
-            save_last_processed_id(event.id)
+        # Проверка на то, что это канал и не исходящее
+        if event.chat and getattr(event.chat, 'broadcast', False) and not event.out:
+            print("[PASS] Репостим сообщение...")
+            try:
+                await event.forward_to(TARGET_CHANNEL)
+                save_last_processed_id(event.id)
+                print("[OK] Репост успешно")
+            except Exception as e:
+                print(f"[ERROR] Не удалось репостить: {e}")
+        else:
+            print(f"[DEBUG] НЕ репостим: broadcast={getattr(event.chat, 'broadcast', None)}, out={event.out}")
 
     await client.run_until_disconnected()
 
