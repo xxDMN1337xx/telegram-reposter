@@ -1,13 +1,13 @@
 import asyncio
 import os
+import json
 import pymorphy2
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME, TARGET_CHANNEL
 
-LAST_ID_FILE = 'last_id.txt'
+LAST_ID_FILE = 'last_ids.json'
+last_processed_ids = {}
 filter_words = set()
-last_processed_id = 0
-
 morph = pymorphy2.MorphAnalyzer(lang='ru')
 
 def load_filter_words():
@@ -25,56 +25,63 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-def load_last_processed_id():
-    global last_processed_id
+def load_last_processed_ids():
+    global last_processed_ids
     if os.path.exists(LAST_ID_FILE):
-        with open(LAST_ID_FILE, 'r') as f:
-            try:
-                last_processed_id = int(f.read().strip())
-            except:
-                last_processed_id = 0
+        try:
+            with open(LAST_ID_FILE, 'r') as f:
+                last_processed_ids = json.load(f)
+        except Exception as e:
+            print(f"[ERROR] Не удалось загрузить {LAST_ID_FILE}: {e}")
+            last_processed_ids = {}
 
-def save_last_processed_id(message_id):
-    with open(LAST_ID_FILE, 'w') as f:
-        f.write(str(message_id))
+def save_last_processed_id(chat_id, message_id):
+    last_processed_ids[str(chat_id)] = message_id
+    try:
+        with open(LAST_ID_FILE, 'w') as f:
+            json.dump(last_processed_ids, f)
+    except Exception as e:
+        print(f"[ERROR] Не удалось сохранить {LAST_ID_FILE}: {e}")
 
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
     load_filter_words()
-    load_last_processed_id()
+    load_last_processed_ids()
 
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
         load_filter_words()
 
-        if event.id <= last_processed_id:
-            print(f"[SKIP] Уже обработано ID {event.id}")
-            return
+        chat_id = str(event.chat_id)
+        message_id = event.id
 
         if event.poll:
             print("[SKIP] Это опрос")
             return
 
+        if chat_id in last_processed_ids and message_id <= last_processed_ids[chat_id]:
+            print(f"[SKIP] Уже обработано: ID {message_id} в чате {chat_id}")
+            return
+
         message_text = event.raw_text or ""
-        print(f"[LOG] Получено сообщение ID {event.id} из {event.chat_id}: {message_text}")
+        print(f"[LOG] Получено сообщение ID {message_id} из {chat_id}: {message_text}")
 
         normalized_words = normalize_text(message_text)
         print(f"[DEBUG] Леммы сообщения: {normalized_words}")
         print(f"[DEBUG] Фильтр: {filter_words}")
 
-        # ❌ Временно отключаем фильтр (для отладки)
-        # if filter_words.intersection(normalized_words):
-        #     print("[FILTERED] Совпадение по фильтру — сообщение пропущено")
-        #     return
+        # ❌ Отключи фильтр если хочешь всё репостить
+        if filter_words.intersection(normalized_words):
+            print("[FILTERED] Совпадение с фильтром — не репостим")
+            return
 
-        # Проверка на то, что это канал и не исходящее
         if event.chat and getattr(event.chat, 'broadcast', False) and not event.out:
             print("[PASS] Репостим сообщение...")
             try:
                 await event.forward_to(TARGET_CHANNEL)
-                save_last_processed_id(event.id)
+                save_last_processed_id(chat_id, message_id)
                 print("[OK] Репост успешно")
             except Exception as e:
                 print(f"[ERROR] Не удалось репостить: {e}")
