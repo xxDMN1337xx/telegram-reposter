@@ -61,6 +61,14 @@ async def main():
             print("[SKIP] Это опрос")
             return
 
+        if event.voice or event.video_note:
+            print("[SKIP] Голосовое сообщение или кружочек")
+            return
+
+        if getattr(event.message, 'grouped_id', None):
+            print("[SKIP] Это часть альбома (ждём обработку всей группы)")
+            return
+
         if chat_id in last_processed_ids and message_id <= last_processed_ids[chat_id]:
             print(f"[SKIP] Уже обработано: ID {message_id} в чате {chat_id}")
             return
@@ -72,7 +80,6 @@ async def main():
         print(f"[DEBUG] Леммы сообщения: {normalized_words}")
         print(f"[DEBUG] Фильтр: {filter_words}")
 
-        # ❌ Отключи фильтр если хочешь всё репостить
         if filter_words.intersection(normalized_words):
             print("[FILTERED] Совпадение с фильтром — не репостим")
             return
@@ -87,6 +94,27 @@ async def main():
                 print(f"[ERROR] Не удалось репостить: {e}")
         else:
             print(f"[DEBUG] НЕ репостим: broadcast={getattr(event.chat, 'broadcast', None)}, out={event.out}")
+
+    @client.on(events.Album)
+    async def album_handler(event):
+        chat_id = str(event.chat_id)
+        grouped_id = getattr(event.messages[0], 'grouped_id', 'unknown')
+        print(f"[ALBUM] Группа сообщений ID {grouped_id} из {chat_id}")
+
+        # Фильтрация по тексту (если он есть в первом сообщении альбома)
+        caption_text = event.messages[0].raw_text or ""
+        normalized = normalize_text(caption_text)
+        if filter_words.intersection(normalized):
+            print("[ALBUM-FILTERED] Фильтр сработал — не репостим альбом")
+            return
+
+        try:
+            await client.forward_messages(TARGET_CHANNEL, event.messages)
+            last_id = max(msg.id for msg in event.messages)
+            save_last_processed_id(chat_id, last_id)
+            print("[OK] Альбом успешно репощен")
+        except Exception as e:
+            print(f"[ERROR] Не удалось репостить альбом: {e}")
 
     await client.run_until_disconnected()
 
