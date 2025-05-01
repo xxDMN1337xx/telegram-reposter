@@ -67,13 +67,14 @@ def save_posted_messages():
 
 
 def log_deleted(chat_id, msg_id, text):
+    safe_text = text.replace('"', '""')[:1000]
     with open(DELETED_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{chat_id},{msg_id},\"{text.replace('\"', '\"\"')[:1000]}\"\n")
-
+        f.write(f'{chat_id},{msg_id},"{safe_text}"\n')
 
 def log_good(chat_id, msg_id, text):
+    safe_text = text.replace('"', '""')[:1000]
     with open(GOOD_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{chat_id},{msg_id},\"{text.replace('\"', '\"\"')[:1000]}\"\n")
+        f.write(f'{chat_id},{msg_id},"{safe_text}"\n')
 
 
 def cleanup_old_posts():
