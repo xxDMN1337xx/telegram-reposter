@@ -1,14 +1,14 @@
 import asyncio
 import os
-import json
 import time
 import pymorphy2
+import datetime
 import google.generativeai as genai
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Gemini
-API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"
+API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"  # ВСТАВЬ СВОЙ КЛЮЧ
 genai.configure(api_key=API_KEY)
 
 models = genai.list_models()
@@ -48,8 +48,18 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Проверка Gemini
-def check_with_gemini(text: str) -> str:
+# === Очередь сообщений
+message_queue = asyncio.Queue()
+gemini_blocked_until = None
+
+async def check_with_gemini(text, client):
+    global gemini_blocked_until
+    now = datetime.datetime.utcnow()
+    if gemini_blocked_until and now < gemini_blocked_until:
+        print(f"[GEMINI] Блок до {gemini_blocked_until}")
+        await asyncio.sleep(10)
+        return "блок"
+
     clean_text = text.replace('"', "'").replace("\n", " ").strip()
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
@@ -75,6 +85,7 @@ def check_with_gemini(text: str) -> str:
 
     for attempt in range(1, 21):
         try:
+            await asyncio.sleep(10)
             response = model.generate_content(prompt)
             answer = response.text.strip().lower()
             print(f"[GEMINI] Попытка {attempt}, ответ: {answer}")
@@ -82,44 +93,34 @@ def check_with_gemini(text: str) -> str:
                 return answer
         except Exception as e:
             print(f"[ERROR] Gemini ошибка: {e}")
-            time.sleep(2)
-
+            if 'quota' in str(e).lower() or '429' in str(e):
+                gemini_blocked_until = now + datetime.timedelta(hours=1)
+                await client.send_message(CHANNEL_TRASH, f"❗️Превышен лимит Gemini API. Отключён до {gemini_blocked_until.strftime('%H:%M:%S')} UTC")
+                return "блок"
+            await asyncio.sleep(3)
     return "ошибка"
 
-# === Главный async блок
-async def main():
-    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-    await client.start()
-
-    load_filter_words()
-
-    @client.on(events.NewMessage(incoming=True))
-    async def handler(event):
+async def process_queue(client):
+    while True:
+        event = await message_queue.get()
         load_filter_words()
 
-        if event.poll:
-            print("[SKIP] Опрос")
-            return
-
-        if event.voice or event.video_note:
-            print("[SKIP] Голосовое / кружок")
-            return
+        if event.poll or event.voice or event.video_note:
+            continue
 
         if getattr(event.message, 'grouped_id', None):
-            print("[SKIP] Альбом-элемент (будет обработан отдельно)")
-            return
+            continue
 
         message_text = event.raw_text or ""
         if not message_text.strip():
-            print("[SKIP] Нет текста (пустое сообщение)")
-            return
+            continue
 
         normalized = normalize_text(message_text)
         if filter_words.intersection(normalized):
-            print("[FILTER] Сработал фильтр по словам")
-            return
+            continue
 
-        result = check_with_gemini(message_text)
+        result = await check_with_gemini(message_text, client)
+
         if result == "полезно":
             await event.forward_to(CHANNEL_GOOD)
             print("[OK] Репост в основной канал")
@@ -127,9 +128,20 @@ async def main():
             await event.forward_to(CHANNEL_TRASH)
             print("[OK] Репост в мусорный канал")
         else:
-            print("[FAIL] Не удалось получить ответ от Gemini")
+            print("[FAIL] Не удалось получить результат от Gemini")
 
-    await client.run_until_disconnected()
+async def main():
+    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    await client.start()
+
+    @client.on(events.NewMessage(incoming=True))
+    async def handler(event):
+        await message_queue.put(event)
+
+    await asyncio.gather(
+        client.run_until_disconnected(),
+        process_queue(client)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
