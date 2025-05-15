@@ -1,25 +1,37 @@
 import asyncio
 import os
 import json
-import csv
+import time
 import pymorphy2
-from datetime import datetime, timedelta
+import google.generativeai as genai
 from telethon import TelegramClient, events
-from telethon.tl.functions.messages import GetMessagesRequest
-from config import API_ID, API_HASH, SESSION_NAME, TARGET_CHANNEL
+from config import API_ID, API_HASH, SESSION_NAME
 
-LAST_ID_FILE = 'last_ids.json'
-POSTED_LOG_FILE = 'posted_messages.json'
-GOOD_LOG_FILE = 'good_log.csv'
-DELETED_LOG_FILE = 'deleted_log.csv'
+# === Gemini
+API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"
+genai.configure(api_key=API_KEY)
 
-last_processed_ids = {}
+models = genai.list_models()
+flash_models = [
+    m.name for m in models
+    if "gemini-2.5-flash" in m.name
+    and "lite" not in m.name
+    and "generateContent" in m.supported_generation_methods
+]
+if not flash_models:
+    raise Exception("Нет доступных моделей gemini-2.5-flash (без lite)")
+
+selected_model = sorted(flash_models)[-1]
+print(f"[INFO] Используется модель: {selected_model}")
+model = genai.GenerativeModel(selected_model)
+
+# === Каналы
+CHANNEL_GOOD = 'https://t.me/fbeed1337'
+CHANNEL_TRASH = 'https://t.me/musoradsxx'
+
+# === Лемматизация + фильтр слов
 filter_words = set()
-posted_messages = {}
 morph = pymorphy2.MorphAnalyzer(lang='ru')
-
-
-# ===== Служебные функции =====
 
 def load_filter_words():
     global filter_words
@@ -32,173 +44,92 @@ def load_filter_words():
                     lemma = morph.parse(word)[0].normal_form
                     filter_words.add(lemma)
 
-
 def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
+# === Проверка Gemini
+def check_with_gemini(text: str) -> str:
+    clean_text = text.replace('"', "'").replace("\n", " ").strip()
+    prompt = (
+        "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
+        "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
+        "- личные посты (о жизни, мотивации, погоде, мнения, размышления, философия)\n"
+        "- общая реклама и нецелевые офферы\n"
+        "- любые бесполезные и ни о чём тексты, без конкретных действий, результатов или данных\n"
+        "- интервью, подкасты, беседы, видеоинтервью\n"
+        "- розыгрыши, конкурсы, призы, подарки\n"
+        "- посты про вечеринки, конференции, собрания, митапы, тусовки и сходки\n"
+        "- лонгриды или колонки без конкретики: без связок, инструментов, цифр или кейсов\n"
+        "- жалобы, наблюдения, история развития рынка, «эволюция контента» и т.д.\n\n"
+        "Публиковать можно ТОЛЬКО если пост содержит:\n"
+        "- конкретную пользу для арбитражников: кейсы, схемы, инсайты, цифры, советы, таблицы\n"
+        "- конкретные связки, источники трафика, подходы, платформы, сравнение офферов\n"
+        "- полезные инструменты, спай, автоматизацию, API, скрипты, парсеры, настройки\n"
+        "- новости по платформам, трекерам, банам, обновлениям, платёжкам и т.д.\n\n"
+        "Если в тексте нет конкретной пользы — считай его бесполезным.\n"
+        "Не будь мягким. Отсеивай всё, что не даст выгоды арбитражнику.\n\n"
+        f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
+        "Ответь **одним словом**, выбрав только из: реклама, бесполезно, полезно."
+    )
 
-def load_last_processed_ids():
-    global last_processed_ids
-    if os.path.exists(LAST_ID_FILE):
+    for attempt in range(1, 21):
         try:
-            with open(LAST_ID_FILE, 'r') as f:
-                last_processed_ids = json.load(f)
-        except:
-            last_processed_ids = {}
+            response = model.generate_content(prompt)
+            answer = response.text.strip().lower()
+            print(f"[GEMINI] Попытка {attempt}, ответ: {answer}")
+            if answer in ['реклама', 'бесполезно', 'полезно']:
+                return answer
+        except Exception as e:
+            print(f"[ERROR] Gemini ошибка: {e}")
+            time.sleep(2)
 
+    return "ошибка"
 
-def save_last_processed_id(chat_id, message_id):
-    last_processed_ids[str(chat_id)] = message_id
-    with open(LAST_ID_FILE, 'w') as f:
-        json.dump(last_processed_ids, f)
-
-
-def load_posted_messages():
-    global posted_messages
-    if os.path.exists(POSTED_LOG_FILE):
-        with open(POSTED_LOG_FILE, 'r') as f:
-            posted_messages.update(json.load(f))
-
-
-def save_posted_messages():
-    with open(POSTED_LOG_FILE, 'w') as f:
-        json.dump(posted_messages, f)
-
-
-def log_deleted(chat_id, msg_id, text):
-    safe_text = text.replace('"', '""')[:1000]
-    with open(DELETED_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f'{chat_id},{msg_id},"{safe_text}"\n')
-
-def log_good(chat_id, msg_id, text):
-    safe_text = text.replace('"', '""')[:1000]
-    with open(GOOD_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f'{chat_id},{msg_id},"{safe_text}"\n')
-
-
-def cleanup_old_posts():
-    now = datetime.utcnow()
-    to_remove = []
-    for key, data in posted_messages.items():
-        ts = datetime.fromisoformat(data["timestamp"])
-        if now - ts > timedelta(days=7):
-            log_good(data["chat_id"], data["msg_id"], data["text"])
-            to_remove.append(key)
-    for key in to_remove:
-        del posted_messages[key]
-    if to_remove:
-        save_posted_messages()
-        print(f"[CLEANUP] Добавлено в good_log: {len(to_remove)}")
-
-
-# ===== Основной бот =====
-
+# === Главный async блок
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
     load_filter_words()
-    load_last_processed_ids()
-    load_posted_messages()
-    cleanup_old_posts()
 
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
         load_filter_words()
 
-        chat_id = str(event.chat_id)
-        message_id = event.id
-
         if event.poll:
-            print("[SKIP] Это опрос")
+            print("[SKIP] Опрос")
             return
 
         if event.voice or event.video_note:
-            print("[SKIP] Голосовое сообщение или кружочек")
+            print("[SKIP] Голосовое / кружок")
             return
 
         if getattr(event.message, 'grouped_id', None):
-            print("[SKIP] Это часть альбома")
-            return
-
-        if chat_id in last_processed_ids and message_id <= last_processed_ids[chat_id]:
-            print(f"[SKIP] Уже обработано: {message_id}")
+            print("[SKIP] Альбом-элемент (будет обработан отдельно)")
             return
 
         message_text = event.raw_text or ""
-        print(f"[NEW] {chat_id}:{message_id} — {message_text[:100]}")
+        if not message_text.strip():
+            print("[SKIP] Нет текста (пустое сообщение)")
+            return
 
         normalized = normalize_text(message_text)
         if filter_words.intersection(normalized):
-            print("[FILTERED] Фильтр по словам")
+            print("[FILTER] Сработал фильтр по словам")
             return
 
-        if event.chat and getattr(event.chat, 'broadcast', False) and not event.out:
-            try:
-                await event.forward_to(TARGET_CHANNEL)
-                save_last_processed_id(chat_id, message_id)
-
-                # логируем для последующего анализа (через 7 дней)
-                key = f"{chat_id}:{message_id}"
-                posted_messages[key] = {
-                    "chat_id": chat_id,
-                    "msg_id": message_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "text": message_text[:1000]
-                }
-                save_posted_messages()
-                print("[OK] Репост успешно")
-            except Exception as e:
-                print(f"[ERROR] Репост не удался: {e}")
-
-    @client.on(events.Album)
-    async def album_handler(event):
-        chat_id = str(event.chat_id)
-        grouped_id = getattr(event.messages[0], 'grouped_id', 'unknown')
-        print(f"[ALBUM] {chat_id}:{grouped_id}")
-
-        caption = event.messages[0].raw_text or ""
-        normalized = normalize_text(caption)
-        if filter_words.intersection(normalized):
-            print("[FILTERED] Альбом по фильтру")
-            return
-
-        try:
-            await client.forward_messages(TARGET_CHANNEL, event.messages)
-            last_id = max(msg.id for msg in event.messages)
-            save_last_processed_id(chat_id, last_id)
-
-            key = f"{chat_id}:{last_id}"
-            posted_messages[key] = {
-                "chat_id": chat_id,
-                "msg_id": last_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "text": caption[:1000]
-            }
-            save_posted_messages()
-            print("[OK] Альбом отправлен")
-        except Exception as e:
-            print(f"[ERROR] Репост альбома не удался: {e}")
-
-    @client.on(events.MessageDeleted())
-    async def deleted_handler(event):
-        for msg_id in event.deleted_ids:
-            key = f"{event.chat_id}:{msg_id}"
-            try:
-                result = await client(GetMessagesRequest(id=[msg_id]))
-                msg = result.messages[0]
-                text = msg.raw_text or "[нет текста]"
-                log_deleted(event.chat_id, msg_id, text)
-                if key in posted_messages:
-                    del posted_messages[key]
-                    save_posted_messages()
-                print(f"[DELETED] Лог удалённого {msg_id}")
-            except Exception as e:
-                print(f"[ERROR] Не удалось логировать удаление: {e}")
+        result = check_with_gemini(message_text)
+        if result == "полезно":
+            await event.forward_to(CHANNEL_GOOD)
+            print("[OK] Репост в основной канал")
+        elif result in ["реклама", "бесполезно"]:
+            await event.forward_to(CHANNEL_TRASH)
+            print("[OK] Репост в мусорный канал")
+        else:
+            print("[FAIL] Не удалось получить ответ от Gemini")
 
     await client.run_until_disconnected()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
