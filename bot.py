@@ -1,14 +1,13 @@
 import asyncio
 import os
-import time
-import pymorphy2
 import datetime
+import pymorphy2
 import google.generativeai as genai
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Gemini
-API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"  # ВСТАВЬ СВОЙ КЛЮЧ
+API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"
 genai.configure(api_key=API_KEY)
 
 models = genai.list_models()
@@ -48,8 +47,6 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Очередь сообщений
-message_queue = asyncio.Queue()
 gemini_blocked_until = None
 
 async def check_with_gemini(text, client):
@@ -100,35 +97,32 @@ async def check_with_gemini(text, client):
             await asyncio.sleep(3)
     return "ошибка"
 
-async def process_queue(client):
-    while True:
-        event = await message_queue.get()
-        load_filter_words()
+async def handle_message(event, client):
+    load_filter_words()
 
-        if event.poll or event.voice or event.video_note:
-            continue
+    if event.poll or event.voice or event.video_note:
+        return
+    if getattr(event.message, 'grouped_id', None):
+        return
 
-        if getattr(event.message, 'grouped_id', None):
-            continue
+    message_text = event.raw_text or ""
+    if not message_text.strip():
+        return
 
-        message_text = event.raw_text or ""
-        if not message_text.strip():
-            continue
+    normalized = normalize_text(message_text)
+    if filter_words.intersection(normalized):
+        return
 
-        normalized = normalize_text(message_text)
-        if filter_words.intersection(normalized):
-            continue
+    result = await check_with_gemini(message_text, client)
 
-        result = await check_with_gemini(message_text, client)
-
-        if result == "полезно":
-            await event.forward_to(CHANNEL_GOOD)
-            print("[OK] Репост в основной канал")
-        elif result in ["реклама", "бесполезно"]:
-            await event.forward_to(CHANNEL_TRASH)
-            print("[OK] Репост в мусорный канал")
-        else:
-            print("[FAIL] Не удалось получить результат от Gemini")
+    if result == "полезно":
+        await event.forward_to(CHANNEL_GOOD)
+        print("[OK] Репост в основной канал")
+    elif result in ["реклама", "бесполезно"]:
+        await event.forward_to(CHANNEL_TRASH)
+        print("[OK] Репост в мусорный канал")
+    else:
+        print("[FAIL] Не удалось получить результат от Gemini")
 
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
@@ -136,12 +130,9 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
-        await message_queue.put(event)
+        await handle_message(event, client)
 
-    await asyncio.gather(
-        client.run_until_disconnected(),
-        process_queue(client)
-    )
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
     asyncio.run(main())
