@@ -8,7 +8,7 @@ from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Gemini
-API_KEY = ""  # ВСТАВЬ СВОЙ КЛЮЧ
+API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"  # ВСТАВЬ СВОЙ КЛЮЧ
 genai.configure(api_key=API_KEY)
 
 models = genai.list_models()
