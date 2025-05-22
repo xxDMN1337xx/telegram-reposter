@@ -38,10 +38,10 @@ def normalize_text(text):
 
 # === Провайдеры без авторизации
 fallback_providers = [
-    g4f.Provider.Yqcloud,
     g4f.Provider.Ails,
     g4f.Provider.bing,
     g4f.Provider.Theb,
+    g4f.Provider.Yqcloud,
     g4f.Provider.FreeGpt
 ]
 
