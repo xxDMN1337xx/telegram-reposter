@@ -2,27 +2,9 @@ import asyncio
 import os
 import datetime
 import pymorphy2
-import google.generativeai as genai
+import g4f
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME
-
-# === Gemini
-API_KEY = "AIzaSyAqUKhMqcDQ5-eqzFoA5LG_95CaoWHet7w"
-genai.configure(api_key=API_KEY)
-
-models = genai.list_models()
-flash_models = [
-    m.name for m in models
-    if "gemini-2.5-flash" in m.name
-    and "lite" not in m.name
-    and "generateContent" in m.supported_generation_methods
-]
-if not flash_models:
-    raise Exception("Нет доступных моделей gemini-2.5-flash (без lite)")
-
-selected_model = sorted(flash_models)[-1]
-print(f"[INFO] Используется модель: {selected_model}")
-model = genai.GenerativeModel(selected_model)
 
 # === Каналы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
@@ -47,17 +29,20 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-gemini_blocked_until = None
+# === Провайдеры без авторизации
+fallback_providers = [
+    g4f.Provider.Yqcloud,
+    g4f.Provider.Ails,
+    g4f.Provider.Bing,
+    g4f.Provider.Theb,
+    g4f.Provider.FreeGpt,
+    g4f.Provider.ChatBase,
+    g4f.Provider.Vercel
+]
 
-async def check_with_gemini(text, client):
-    global gemini_blocked_until
-    now = datetime.datetime.utcnow()
-    if gemini_blocked_until and now < gemini_blocked_until:
-        print(f"[GEMINI] Блок до {gemini_blocked_until}")
-        await asyncio.sleep(10)
-        return "блок"
-
+async def check_with_gpt(text: str, client) -> str:
     clean_text = text.replace('"', "'").replace("\n", " ").strip()
+
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
         "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
@@ -73,28 +58,34 @@ async def check_with_gemini(text, client):
         "- конкретную пользу для арбитражников: кейсы, схемы, инсайты, цифры, советы, таблицы\n"
         "- конкретные связки, источники трафика, подходы, платформы, сравнение офферов\n"
         "- полезные инструменты, спай, автоматизацию, API, скрипты, парсеры, настройки\n"
+        "- AI-инструменты, нейросети, ChatGPT, MidJourney, Sora, автоматизация с помощью ИИ\n"
         "- новости по платформам, трекерам, банам, обновлениям, платёжкам и т.д.\n\n"
         "Если в тексте нет конкретной пользы — считай его бесполезным.\n"
         "Не будь мягким. Отсеивай всё, что не даст выгоды арбитражнику.\n\n"
         f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
-        "Ответь **одним словом**, выбрав только из: реклама, бесполезно, полезно."
+        "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
     )
 
-    for attempt in range(1, 21):
+    for provider in fallback_providers:
         try:
-            await asyncio.sleep(10)
-            response = model.generate_content(prompt)
-            answer = response.text.strip().lower()
-            print(f"[GEMINI] Попытка {attempt}, ответ: {answer}")
-            if answer in ['реклама', 'бесполезно', 'полезно']:
-                return answer
+            models = getattr(provider, "models", ["gpt-4", "gpt-3.5"])  # допустимые модели
+            for model_name in models:
+                try:
+                    response = g4f.ChatCompletion.create(
+                        model=model_name,
+                        provider=provider,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    result = response.strip().lower()
+                    print(f"[GPT] {provider.__name__} / {model_name} → {result}")
+                    await client.send_message(CHANNEL_TRASH, f"✅ GPT ответ ({provider.__name__}, {model_name}): {result}")
+                    return result
+                except Exception as inner:
+                    continue  # пробуем следующий model
         except Exception as e:
-            print(f"[ERROR] Gemini ошибка: {e}")
-            if 'quota' in str(e).lower() or '429' in str(e):
-                gemini_blocked_until = now + datetime.timedelta(hours=1)
-                await client.send_message(CHANNEL_TRASH, f"❗️Превышен лимит Gemini API. Отключён до {gemini_blocked_until.strftime('%H:%M:%S')} UTC")
-                return "блок"
-            await asyncio.sleep(3)
+            continue  # пробуем следующий provider
+
+    await client.send_message(CHANNEL_TRASH, "❌ Ошибка: не удалось получить ответ от ни одного GPT-провайдера.")
     return "ошибка"
 
 async def handle_message(event, client):
@@ -113,7 +104,7 @@ async def handle_message(event, client):
     if filter_words.intersection(normalized):
         return
 
-    result = await check_with_gemini(message_text, client)
+    result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
         await event.forward_to(CHANNEL_GOOD)
@@ -122,7 +113,7 @@ async def handle_message(event, client):
         await event.forward_to(CHANNEL_TRASH)
         print("[OK] Репост в мусорный канал")
     else:
-        print("[FAIL] Не удалось получить результат от Gemini")
+        print("[FAIL] GPT не смог классифицировать сообщение")
 
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
