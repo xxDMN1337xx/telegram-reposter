@@ -38,10 +38,9 @@ def normalize_text(text):
 
 # === Провайдеры без авторизации
 fallback_providers = [
-    g4f.Provider.OpenaiChat,    # gpt-4o
+    g4f.Provider.You,           # gpt-4o
     g4f.Provider.FreeGpt,       # gemini
-    g4f.Provider.Yqcloud,       # gpt-4
-    g4f.Provider.You            # gpt-4o
+    g4f.Provider.Yqcloud        # gpt-4
 ]
 
 
