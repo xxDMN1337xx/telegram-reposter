@@ -11,11 +11,11 @@ from config import API_ID, API_HASH, SESSION_NAME
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Очистка текста от эмоджи и ссылок
+# === Очистка текста от ссылок и эмоджи + ограничение длины
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
-    return text.strip()[:2000]  # ограничение по длине
+    return text.strip()[:2000]  # ограничение длины
 
 # === Лемматизация + фильтр слов
 filter_words = set()
@@ -112,13 +112,13 @@ async def handle_message(event, client):
     if not message_text.strip():
         return
 
+    if len(message_text) > 2000:
+        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
+
     normalized = normalize_text(message_text)
     if filter_words.intersection(normalized):
         return
 
-    if len(message_text) > 2000:
-    await client.send_message(CHANNEL_TRASH, f"⚠️ Длина поста {len(message_text)} превышает лимит — обрежем до 2000 символов.")
-    
     result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
