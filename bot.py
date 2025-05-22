@@ -110,3 +110,39 @@ async def handle_message(event, client):
     message_text = event.message.text or ""
     if getattr(event.message, 'grouped_id', None) and not message_text.strip():
         print("[SKIP] Альбом без текста")
+        return
+
+    if not message_text.strip():
+        print("[SKIP] Сообщение без текста")
+        return
+
+    if len(message_text) > 2000:
+        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
+
+    normalized = normalize_text(message_text)
+    if filter_words.intersection(normalized):
+        return
+
+    result = await check_with_gpt(message_text, client)
+
+    if result == "полезно":
+        await event.forward_to(CHANNEL_GOOD)
+        print("[OK] Репост в основной канал")
+    elif result in ["реклама", "бесполезно"]:
+        await event.forward_to(CHANNEL_TRASH)
+        print("[OK] Репост в мусорный канал")
+    else:
+        print("[FAIL] GPT не смог классифицировать сообщение")
+
+async def main():
+    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    await client.start()
+
+    @client.on(events.NewMessage(incoming=True))
+    async def handler(event):
+        await handle_message(event, client)
+
+    await client.run_until_disconnected()
+
+if __name__ == "__main__":
+    asyncio.run(main())
