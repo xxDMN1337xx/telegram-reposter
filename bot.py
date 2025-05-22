@@ -33,12 +33,10 @@ def normalize_text(text):
 fallback_providers = [
     g4f.Provider.Yqcloud,
     g4f.Provider.Ails,
-    g4f.Provider.bing,         # с маленькой буквы
+    g4f.Provider.bing,
     g4f.Provider.Theb,
-    g4f.Provider.FreeGpt,
-    g4f.Provider.Vercel
+    g4f.Provider.FreeGpt
 ]
-
 
 async def check_with_gpt(text: str, client) -> str:
     clean_text = text.replace('"', "'").replace("\n", " ").strip()
