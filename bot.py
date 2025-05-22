@@ -31,13 +31,13 @@ def normalize_text(text):
 
 # === Провайдеры без авторизации
 fallback_providers = [
-    g4f.Provider.yqcloud,
-    g4f.Provider.ails,
-    g4f.Provider.bing,
-    g4f.Provider.theb,
-    g4f.Provider.freegpt,
-    g4f.Provider.chatbase,
-    g4f.Provider.vercel
+    g4f.Provider.Yqcloud,
+    g4f.Provider.Ails,
+    g4f.Provider.Bing,
+    g4f.Provider.Theb,
+    g4f.Provider.FreeGpt,
+    g4f.Provider.ChatBase,
+    g4f.Provider.Vercel
 ]
 
 async def check_with_gpt(text: str, client) -> str:
