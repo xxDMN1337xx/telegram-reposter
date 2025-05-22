@@ -15,7 +15,7 @@ CHANNEL_TRASH = 'https://t.me/musoradsxx'
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
-    return text.strip()
+    return text.strip()[:2000]  # ограничение по длине
 
 # === Лемматизация + фильтр слов
 filter_words = set()
@@ -116,6 +116,9 @@ async def handle_message(event, client):
     if filter_words.intersection(normalized):
         return
 
+    if len(message_text) > 2000:
+    await client.send_message(CHANNEL_TRASH, f"⚠️ Длина поста {len(message_text)} превышает лимит — обрежем до 2000 символов.")
+    
     result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
