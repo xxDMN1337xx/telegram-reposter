@@ -108,7 +108,7 @@ async def handle_message(event, client):
     if getattr(event.message, 'grouped_id', None):
         return
 
-    message_text = event.raw_text or ""
+    message_text = event.message.text or ""
     if not message_text.strip():
         return
 
