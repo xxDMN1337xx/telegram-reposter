@@ -65,23 +65,30 @@ async def check_with_gpt(text: str, client) -> str:
     )
 
     for provider in fallback_providers:
-        try:
-            models = getattr(provider, "models", ["gpt-4", "gpt-3.5"])  # допустимые модели
-            for model_name in models:
-                try:
-                    response = g4f.ChatCompletion.create(
+        models = getattr(provider, "models", ["gpt-4", "gpt-3.5"])
+        for model_name in models:
+            try:
+                print(f"[GPT] Пробуем {provider.__name__} / {model_name}")
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        g4f.ChatCompletion.create,
                         model=model_name,
                         provider=provider,
                         messages=[{"role": "user", "content": prompt}]
-                    )
-                    result = response.strip().lower()
-                    print(f"[GPT] {provider.__name__} / {model_name} → {result}")
+                    ),
+                    timeout=30
+                )
+                result = (response or "").strip().lower()
+                if result in ['реклама', 'бесполезно', 'полезно']:
                     await client.send_message(CHANNEL_TRASH, f"✅ GPT ответ ({provider.__name__}, {model_name}): {result}")
                     return result
-                except Exception as inner:
-                    continue  # пробуем следующий model
-        except Exception as e:
-            continue  # пробуем следующий provider
+                else:
+                    await client.send_message(CHANNEL_TRASH, f"⚠️ Пустой или странный ответ от {provider.__name__}: '{result}'")
+            except asyncio.TimeoutError:
+                await client.send_message(CHANNEL_TRASH, f"⏱ GPT таймаут: {provider.__name__} / {model_name}")
+            except Exception as e:
+                await client.send_message(CHANNEL_TRASH, f"❌ GPT ошибка: {provider.__name__} / {model_name}\n{str(e)[:300]}")
+                continue
 
     await client.send_message(CHANNEL_TRASH, "❌ Ошибка: не удалось получить ответ от ни одного GPT-провайдера.")
     return "ошибка"
