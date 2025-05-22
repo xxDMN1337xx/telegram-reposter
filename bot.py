@@ -38,12 +38,12 @@ def normalize_text(text):
 
 # === Провайдеры без авторизации
 fallback_providers = [
-    g4f.Provider.Ails,
-    g4f.Provider.bing,
-    g4f.Provider.Theb,
+    g4f.Provider.FreeGpt,
     g4f.Provider.Yqcloud,
-    g4f.Provider.FreeGpt
+    g4f.Provider.ChatgptAi,
+    g4f.Provider.OpenaiChat
 ]
+
 
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
