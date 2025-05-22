@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import datetime
 import pymorphy2
 import g4f
@@ -9,6 +10,12 @@ from config import API_ID, API_HASH, SESSION_NAME
 # === Каналы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
+
+# === Очистка текста от эмоджи и ссылок
+def sanitize_input(text):
+    text = re.sub(r'https?://\S+', '[ссылка]', text)
+    text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
+    return text.strip()
 
 # === Лемматизация + фильтр слов
 filter_words = set()
@@ -39,7 +46,7 @@ fallback_providers = [
 ]
 
 async def check_with_gpt(text: str, client) -> str:
-    clean_text = text.replace('"', "'").replace("\n", " ").strip()
+    clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
