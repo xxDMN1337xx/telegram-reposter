@@ -6,11 +6,6 @@ import g4f
 from telethon import TelegramClient, events
 from config import API_ID, API_HASH, SESSION_NAME
 
-# опционально подавить предупреждение:
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-
 # === Каналы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
