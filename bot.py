@@ -38,7 +38,7 @@ def normalize_text(text):
 fallback_providers = [
     g4f.Provider.Yqcloud,
     g4f.Provider.Ails,
-    g4f.Provider.Bing,
+    g4f.Provider.bing,        # <— только этот с маленькой буквы
     g4f.Provider.Theb,
     g4f.Provider.FreeGpt,
     g4f.Provider.ChatBase,
