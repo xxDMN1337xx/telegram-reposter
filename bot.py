@@ -4,6 +4,7 @@ import re
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
+from telethon.tl.types import Message, MessageMediaPhoto
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -149,11 +150,20 @@ async def handle_message(event, client):
 
     result = await check_with_gpt(message_text, client)
 
+    # Групповая отправка всех сообщений с одинаковым grouped_id
+    messages_to_forward = [event.message]
+    if event.message.grouped_id:
+        async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
+            if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
+                messages_to_forward.append(msg)
+
+    messages_to_forward.sort(key=lambda m: m.id)
+
     if result == "полезно":
-        await client.forward_messages(CHANNEL_GOOD, messages=[event.message], from_peer=event.chat_id)
+        await client.forward_messages(CHANNEL_GOOD, messages=messages_to_forward, from_peer=event.chat_id)
         print("[OK] Репост в основной канал")
     else:
-        await client.forward_messages(CHANNEL_TRASH, messages=[event.message], from_peer=event.chat_id)
+        await client.forward_messages(CHANNEL_TRASH, messages=messages_to_forward, from_peer=event.chat_id)
         print("[OK] Репост в мусорный канал")
 
 # === Запуск клиента
