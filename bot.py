@@ -97,8 +97,8 @@ async def check_with_gpt(text: str, client) -> str:
             result = (response or "").strip().lower()
             if result in ['реклама', 'бесполезно', 'полезно']:
                 return result
-        except:
-            pass
+        except Exception as e:
+            print(f"[GPT ERROR] {provider.__name__}: {str(e)[:100]}")
         return None
 
     tasks = [call_provider(p) for p in fallback_providers]
@@ -123,7 +123,7 @@ async def check_with_gpt(text: str, client) -> str:
     else:
         return "мусор"
 
-# === Обработка сообщения
+# === Обработка входящего сообщения
 async def handle_message(event, client):
     load_filter_words()
 
@@ -146,7 +146,7 @@ async def handle_message(event, client):
     else:
         print("[FAIL] Не удалось классифицировать сообщение")
 
-# === Запуск бота
+# === Запуск клиента
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
