@@ -86,7 +86,10 @@ async def check_with_gpt(text: str, client) -> str:
         "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
     )
 
-    async def call_provider(provider):
+    results = []
+    total = len(fallback_providers)
+
+    async def call_provider(provider, index):
         try:
             model = getattr(provider, "models", ["gpt-3.5"])[0]
             response = await asyncio.wait_for(
@@ -100,16 +103,19 @@ async def check_with_gpt(text: str, client) -> str:
             )
             result = (response or "").strip().lower()
             if result in ['реклама', 'бесполезно', 'полезно']:
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}")
                 return result
-        except Exception:
-            pass
+            else:
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'")
+        except Exception as e:
+            await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}")
         return None
 
-    tasks = [call_provider(p) for p in fallback_providers]
-    results = await asyncio.gather(*tasks)
+    tasks = [call_provider(p, i) for i, p in enumerate(fallback_providers)]
+    raw_results = await asyncio.gather(*tasks)
 
     summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
-    for result in results:
+    for result in raw_results:
         if result in summary:
             summary[result] += 1
 
@@ -120,7 +126,7 @@ async def check_with_gpt(text: str, client) -> str:
         await asyncio.sleep(1800)
         return await check_with_gpt(text, client)
 
-    await client.send_message(CHANNEL_TRASH, f"📊 Результаты анализа:\n{summary}")
+    await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}")
 
     if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]):
         return "полезно"
@@ -135,9 +141,6 @@ async def handle_message(event, client):
         return
 
     message_text = event.message.text or ""
-    if getattr(event.message, 'grouped_id', None) and not message_text.strip():
-        return
-
     if not message_text.strip():
         return
 
@@ -151,13 +154,11 @@ async def handle_message(event, client):
     result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
-        await client.forward_messages(CHANNEL_GOOD, messages=event.message, from_peer=event.chat_id)
+        await client.forward_messages(CHANNEL_GOOD, messages=event.message.id, from_peer=event.chat_id)
         print("[OK] Репост в основной канал")
-    elif result in ["реклама", "бесполезно", "мусор"]:
-        await client.forward_messages(CHANNEL_TRASH, messages=event.message, from_peer=event.chat_id)
-        print("[OK] Репост в мусорный канал")
     else:
-        print("[FAIL] Не удалось классифицировать")
+        await client.forward_messages(CHANNEL_TRASH, messages=event.message.id, from_peer=event.chat_id)
+        print("[OK] Репост в мусорный канал")
 
 # === Запуск клиента
 async def main():
