@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import datetime
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
@@ -11,7 +10,7 @@ from config import API_ID, API_HASH, SESSION_NAME
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Провайдеры без авторизации
+# === Провайдеры
 fallback_providers = [
     g4f.Provider.Blackbox,
     g4f.Provider.ChatGLM,
@@ -60,7 +59,7 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Основная проверка GPT
+# === Проверка GPT
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
@@ -89,10 +88,12 @@ async def check_with_gpt(text: str, client) -> str:
 
     async def call_provider(provider):
         try:
+            model = getattr(provider, "models", ["gpt-3.5"])[0]
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     g4f.ChatCompletion.create,
                     provider=provider,
+                    model=model,
                     messages=[{"role": "user", "content": prompt}]
                 ),
                 timeout=30
