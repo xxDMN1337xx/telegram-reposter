@@ -18,17 +18,12 @@ fallback_providers = [
     g4f.Provider.DocsBot,
     g4f.Provider.Dynaspark,
     g4f.Provider.GizAI,
-    g4f.Provider.LambdaChat,
     g4f.Provider.OIVSCodeSer0501,
     g4f.Provider.OIVSCodeSer2,
     g4f.Provider.OIVSCodeSer5,
-    g4f.Provider.PollinationsAI,
     g4f.Provider.Qwen_Qwen_2_5,
-    g4f.Provider.Qwen_Qwen_2_5M,
     g4f.Provider.Qwen_Qwen_2_5_Max,
     g4f.Provider.Qwen_Qwen_2_72B,
-    g4f.Provider.Qwen_Qwen_3,
-    g4f.Provider.TeachAnything,
     g4f.Provider.WeWordle,
     g4f.Provider.Websim,
     g4f.Provider.Yqcloud,
@@ -102,6 +97,7 @@ async def check_with_gpt(text: str, client) -> str:
                 timeout=30
             )
             result = (response or "").strip().lower()
+            result = re.sub(r'[^а-яА-Я]', '', result)  # Убираем лишние символы
             if result in ['реклама', 'бесполезно', 'полезно']:
                 await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}")
                 return result
@@ -154,10 +150,10 @@ async def handle_message(event, client):
     result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
-        await client.forward_messages(CHANNEL_GOOD, messages=event.message.id, from_peer=event.chat_id)
+        await client.forward_messages(CHANNEL_GOOD, messages=[event.message], from_peer=event.chat_id)
         print("[OK] Репост в основной канал")
     else:
-        await client.forward_messages(CHANNEL_TRASH, messages=event.message.id, from_peer=event.chat_id)
+        await client.forward_messages(CHANNEL_TRASH, messages=[event.message], from_peer=event.chat_id)
         print("[OK] Репост в мусорный канал")
 
 # === Запуск клиента
