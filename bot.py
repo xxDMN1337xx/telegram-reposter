@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import datetime
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
@@ -11,13 +10,7 @@ from config import API_ID, API_HASH, SESSION_NAME
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Очистка текста от ссылок и эмоджи + ограничение длины
-def sanitize_input(text):
-    text = re.sub(r'https?://\S+', '[ссылка]', text)
-    text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
-    return text.strip()[:2000]  # ограничение длины
-
-# === Лемматизация + фильтр слов
+# === Слова-фильтр
 filter_words = set()
 morph = pymorphy2.MorphAnalyzer(lang='ru')
 
@@ -36,14 +29,36 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Провайдеры без авторизации
+def sanitize_input(text):
+    text = re.sub(r'https?://\S+', '[ссылка]', text)
+    text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
+    return text.strip()[:2000]
+
+# === Провайдеры
 fallback_providers = [
-    g4f.Provider.FreeGpt,       # gemini
-    g4f.Provider.Yqcloud        # gpt-4
+    g4f.Provider.Blackbox,
+    g4f.Provider.ChatGLM,
+    g4f.Provider.CohereForAI_C4AI_Command,
+    g4f.Provider.DocsBot,
+    g4f.Provider.Dynaspark,
+    g4f.Provider.GizAI,
+    g4f.Provider.LambdaChat,
+    g4f.Provider.OIVSCodeSer0501,
+    g4f.Provider.OIVSCodeSer2,
+    g4f.Provider.OIVSCodeSer5,
+    g4f.Provider.PollinationsAI,
+    g4f.Provider.Qwen_Qwen_2_5,
+    g4f.Provider.Qwen_Qwen_2_5M,
+    g4f.Provider.Qwen_Qwen_2_5_Max,
+    g4f.Provider.Qwen_Qwen_2_72B,
+    g4f.Provider.Qwen_Qwen_3,
+    g4f.Provider.TeachAnything,
+    g4f.Provider.WeWordle,
+    g4f.Provider.Websim,
+    g4f.Provider.Yqcloud,
 ]
 
-
-
+# === Основная проверка GPT
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
@@ -62,61 +77,59 @@ async def check_with_gpt(text: str, client) -> str:
         "- конкретную пользу для арбитражников: кейсы, схемы, инсайты, цифры, советы, таблицы\n"
         "- конкретные связки, источники трафика, подходы, платформы, сравнение офферов\n"
         "- полезные инструменты, спай, автоматизацию, API, скрипты, парсеры, настройки\n"
-        "- - Обзоры или новости об ИИ-инструментах (например, SkyReels, Scira, Sora, ChatGPT, MidJourney, Runway, Leonardo и др.) считаются полезными, даже если в посте нет кейса, цифр, выгоды или примера. Такие обзоры сами по себе дают арбитражнику новые инструменты для работы\n"
+        "- Обзоры или новости об ИИ-инструментах (например, SkyReels, Scira, Sora, ChatGPT, MidJourney, Runway, Leonardo и др.) считаются полезными\n"
         "- новости по платформам, трекерам, банам, обновлениям, платёжкам и т.д.\n\n"
         "Если в тексте нет конкретной пользы — считай его бесполезным.\n"
-        "Не будь мягким. Отсеивай всё, что не даст выгоды арбитражнику.\n\n"
-        f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
-        "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
+        "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно.\n\n"
+        f"Анализ:\n\"{clean_text}\""
     )
 
-    for provider in fallback_providers:
-        models = getattr(provider, "models", ["gpt-4", "gpt-3.5"])
-        for model_name in models:
-            try:
-                print(f"[GPT] Пробуем {provider.__name__} / {model_name}")
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        g4f.ChatCompletion.create,
-                        model=model_name,
-                        provider=provider,
-                        messages=[{"role": "user", "content": prompt}]
-                    ),
-                    timeout=30
-                )
-                result = (response or "").strip().lower()
-                if result in ['реклама', 'бесполезно', 'полезно']:
-                    await client.send_message(CHANNEL_TRASH, f"✅ GPT ответ ({provider.__name__}, {model_name}): {result}")
-                    return result
-                else:
-                    await client.send_message(CHANNEL_TRASH, f"⚠️ Пустой или странный ответ от {provider.__name__}: '{result}'")
-            except asyncio.TimeoutError:
-                await client.send_message(CHANNEL_TRASH, f"⏱ GPT таймаут: {provider.__name__} / {model_name}")
-            except Exception as e:
-                await client.send_message(CHANNEL_TRASH, f"❌ GPT ошибка: {provider.__name__} / {model_name}\n{str(e)[:300]}")
-                continue
+    async def call_provider(provider):
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    g4f.ChatCompletion.create,
+                    provider=provider,
+                    messages=[{"role": "user", "content": prompt}]
+                ),
+                timeout=30
+            )
+            result = (response or "").strip().lower()
+            if result in ['реклама', 'бесполезно', 'полезно']:
+                return result
+        except:
+            pass
+        return None
 
-    await client.send_message(CHANNEL_TRASH, "❌ Ошибка: не удалось получить ответ от ни одного GPT-провайдера.")
-    return "ошибка"
+    tasks = [call_provider(p) for p in fallback_providers]
+    results = await asyncio.gather(*tasks)
 
+    summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
+    valid = 0
+
+    for result in results:
+        if result in summary:
+            summary[result] += 1
+            valid += 1
+
+    if valid == 0:
+        await client.send_message(CHANNEL_TRASH, "❌ Ни один GPT-провайдер не дал ответа. Повтор через 30 минут.")
+        await asyncio.sleep(1800)
+        return await check_with_gpt(text, client)
+
+    await client.send_message(CHANNEL_TRASH, f"📊 GPT результаты:\n{summary}")
+    if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]):
+        return "полезно"
+    else:
+        return "мусор"
+
+# === Обработка сообщения
 async def handle_message(event, client):
     load_filter_words()
 
-    if event.poll or event.voice or event.video_note:
-        return
-
-    # Разрешаем альбомы с текстом, игнорируем только если вообще нет текста
     message_text = event.message.text or ""
-    if getattr(event.message, 'grouped_id', None) and not message_text.strip():
-        print("[SKIP] Альбом без текста")
-        return
-
     if not message_text.strip():
-        print("[SKIP] Сообщение без текста")
         return
-
-    if len(message_text) > 2000:
-        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
 
     normalized = normalize_text(message_text)
     if filter_words.intersection(normalized):
@@ -125,14 +138,15 @@ async def handle_message(event, client):
     result = await check_with_gpt(message_text, client)
 
     if result == "полезно":
-        await event.forward_to(CHANNEL_GOOD)
+        await event.message.forward_to(CHANNEL_GOOD)
         print("[OK] Репост в основной канал")
-    elif result in ["реклама", "бесполезно"]:
-        await event.forward_to(CHANNEL_TRASH)
+    elif result == "мусор":
+        await event.message.forward_to(CHANNEL_TRASH)
         print("[OK] Репост в мусорный канал")
     else:
-        print("[FAIL] GPT не смог классифицировать сообщение")
+        print("[FAIL] Не удалось классифицировать сообщение")
 
+# === Запуск бота
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
