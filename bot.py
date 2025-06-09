@@ -4,7 +4,7 @@ import re
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, MessageMediaPhoto
+from telethon.tl.types import Message
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -169,20 +169,34 @@ async def handle_message(event, client):
 
     if is_copy:
         source_url = COPY_CHANNELS[channel_username]
-        for msg in messages_to_forward:
-            caption = (msg.text or "").strip()
-            if caption:
-                caption += f"\n\nИсточник: {source_url}"
-            elif msg.media:
-                caption = f"Источник: {source_url}"
 
+        media_files = []
+        full_text = ""
+
+        for msg in messages_to_forward:
             if msg.media:
-                try:
-                    await client.send_file(target_channel, file=msg.media, caption=caption, force_document=False)
-                except Exception as e:
-                    print(f"[!] Ошибка отправки медиа: {e}")
-            elif caption:
-                await client.send_message(target_channel, caption)
+                media_files.append(msg.media)
+            if msg.text:
+                full_text += msg.text.strip() + "\n"
+
+        if full_text.strip():
+            full_text = full_text.strip() + f"\n\nИсточник: {source_url}"
+        else:
+            full_text = f"Источник: {source_url}"
+
+        if media_files:
+            try:
+                await client.send_file(
+                    target_channel,
+                    file=media_files,
+                    caption=full_text,
+                    force_document=False
+                )
+            except Exception as e:
+                print(f"[!] Ошибка отправки медиа: {e}")
+        else:
+            await client.send_message(target_channel, full_text)
+
         print(f"[OK] Копия с источника: {source_url}")
     else:
         await client.forward_messages(target_channel, messages=messages_to_forward, from_peer=event.chat_id)
