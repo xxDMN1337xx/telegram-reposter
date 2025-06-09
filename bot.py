@@ -158,12 +158,24 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    channel_username = event.chat.username or ""
-    is_copy = channel_username in COPY_CHANNELS
+    # === Определение, нужно ли копировать (по источнику или fwd_from)
+    original_username = None
+
+    if event.chat.username in COPY_CHANNELS:
+        original_username = event.chat.username
+    elif event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
+        try:
+            from_peer = await client.get_entity(event.message.fwd_from.from_id)
+            if from_peer.username in COPY_CHANNELS:
+                original_username = from_peer.username
+        except:
+            pass
+
+    is_copy = original_username is not None
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
     if is_copy:
-        source_url = COPY_CHANNELS[channel_username]
+        source_url = COPY_CHANNELS[original_username]
 
         media_files = []
         full_text = ""
