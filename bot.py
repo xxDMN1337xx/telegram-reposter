@@ -11,6 +11,12 @@ from config import API_ID, API_HASH, SESSION_NAME
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
+# === Источники с копированием
+COPY_CHANNELS = {
+    "piratecpa": "https://t.me/piratecpa",
+    "huihuihui111111111111": "https://t.me/huihuihui111111111111"
+}
+
 # === Провайдеры
 fallback_providers = [
     g4f.Provider.Blackbox,
@@ -98,7 +104,7 @@ async def check_with_gpt(text: str, client) -> str:
                 timeout=30
             )
             result = (response or "").strip().lower()
-            result = re.sub(r'[^а-яА-Я]', '', result)  # Убираем лишние символы
+            result = re.sub(r'[^а-яА-Я]', '', result)
             if result in ['реклама', 'бесполезно', 'полезно']:
                 await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}")
                 return result
@@ -150,21 +156,37 @@ async def handle_message(event, client):
 
     result = await check_with_gpt(message_text, client)
 
-    # Групповая отправка всех сообщений с одинаковым grouped_id
     messages_to_forward = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
             if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
                 messages_to_forward.append(msg)
-
     messages_to_forward.sort(key=lambda m: m.id)
 
-    if result == "полезно":
-        await client.forward_messages(CHANNEL_GOOD, messages=messages_to_forward, from_peer=event.chat_id)
-        print("[OK] Репост в основной канал")
+    channel_username = event.chat.username or ""
+    is_copy = channel_username in COPY_CHANNELS
+    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
+
+    if is_copy:
+        source_url = COPY_CHANNELS[channel_username]
+        for msg in messages_to_forward:
+            caption = (msg.text or "").strip()
+            if caption:
+                caption += f"\n\nИсточник: {source_url}"
+            elif msg.media:
+                caption = f"Источник: {source_url}"
+
+            if msg.media:
+                try:
+                    await client.send_file(target_channel, file=msg.media, caption=caption, force_document=False)
+                except Exception as e:
+                    print(f"[!] Ошибка отправки медиа: {e}")
+            elif caption:
+                await client.send_message(target_channel, caption)
+        print(f"[OK] Копия с источника: {source_url}")
     else:
-        await client.forward_messages(CHANNEL_TRASH, messages=messages_to_forward, from_peer=event.chat_id)
-        print("[OK] Репост в мусорный канал")
+        await client.forward_messages(target_channel, messages=messages_to_forward, from_peer=event.chat_id)
+        print("[OK] Репост обычным способом")
 
 # === Запуск клиента
 async def main():
