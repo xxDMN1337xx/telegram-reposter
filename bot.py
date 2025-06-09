@@ -27,7 +27,6 @@ fallback_providers = [
     g4f.Provider.Qwen_Qwen_2_5,
     g4f.Provider.Qwen_Qwen_2_5_Max,
     g4f.Provider.Qwen_Qwen_2_72B,
-    g4f.Provider.Websim,
     g4f.Provider.Yqcloud,
 ]
 
