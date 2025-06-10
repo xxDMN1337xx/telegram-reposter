@@ -14,6 +14,9 @@ CHANNEL_TRASH = 'https://t.me/musoradsxx'
 # === Источники с копированием
 COPY_CHANNELS = {
     "piratecpa": "https://t.me/piratecpa",
+    "piratcpa": "https://t.me/piratcpa",
+    "arbitrazh_traffika": "https://t.me/arbitrazh_traffika",
+    "web3traff": "https://t.me/web3traff",
     "huihuihui111111111111": "https://t.me/huihuihui111111111111",
     "sapogcpa": "https://t.me/sapogcpa"
 }
