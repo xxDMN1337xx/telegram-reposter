@@ -11,14 +11,11 @@ from config import API_ID, API_HASH, SESSION_NAME
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Источники с копированием
+# === Источники с копированием (channel_id: ссылка)
 COPY_CHANNELS = {
-    "piratecpa": "https://t.me/piratecpa",
-    "piratcpa": "https://t.me/piratcpa",
-    "arbitrazh_traffika": "https://t.me/arbitrazh_traffika",
-    "web3traff": "https://t.me/web3traff",
-    "huihuihui111111111111": "https://t.me/huihuihui111111111111",
-    "sapogcpa": "https://t.me/sapogcpa"
+    1672980976: "https://t.me/piratecpa",      # piratecpa, piratcpa, arbitrazh_traffika, web3traff
+    2530485449: "https://t.me/huihuihui111111111111",
+    2101853050: "https://t.me/sapogcpa"
 }
 
 # === Провайдеры
@@ -161,25 +158,20 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    # === Определение, нужно ли копировать (по источнику или fwd_from)
-    original_username = None
-
-    if event.chat.username in COPY_CHANNELS:
-        original_username = event.chat.username
+    # === Определение, нужно ли копировать (по channel_id или fwd_from.channel_id)
+    original_channel_id = None
+    if getattr(event.chat, "id", None) in COPY_CHANNELS:
+        original_channel_id = event.chat.id
     elif event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
-        try:
-            from_peer = await client.get_entity(event.message.fwd_from.from_id)
-            if from_peer.username in COPY_CHANNELS:
-                original_username = from_peer.username
-        except:
-            pass
+        channel_id = event.message.fwd_from.from_id.channel_id
+        if channel_id in COPY_CHANNELS:
+            original_channel_id = channel_id
 
-    is_copy = original_username is not None
+    is_copy = original_channel_id is not None
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
     if is_copy:
-        source_url = COPY_CHANNELS[original_username]
-
+        source_url = COPY_CHANNELS[original_channel_id]
         media_files = []
         full_text = ""
 
