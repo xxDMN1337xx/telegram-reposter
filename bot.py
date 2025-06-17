@@ -5,6 +5,7 @@ import pymorphy2
 import g4f
 from telethon import TelegramClient, events
 from telethon.tl.types import Message, PeerChannel, PeerUser
+from telethon.utils import get_message_text  # <--- ИЗМЕНЕНИЕ 1: ДОБАВЛЕН НУЖНЫЙ ИМПОРТ
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -128,18 +129,27 @@ async def handle_message(event, client):
     if event.poll or event.voice or event.video_note:
         return
 
-    message_text = event.message.text or ""
-    if not message_text.strip():
-        return
+    # Для GPT-анализа используем чистый текст без форматирования
+    message_text_for_gpt = event.message.text or ""
+    
+    # Проверяем, есть ли вообще текст для анализа
+    if not message_text_for_gpt.strip() and not event.message.media:
+        return # Игнорируем пустые сообщения без медиа
 
-    if len(message_text) > 2000:
-        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
+    if len(message_text_for_gpt) > 2000:
+        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text_for_gpt)})")
 
-    normalized = normalize_text(message_text)
+    normalized = normalize_text(message_text_for_gpt)
     if filter_words.intersection(normalized):
         return
 
-    result = await check_with_gpt(message_text, client)
+    # Если текста совсем нет (например, только фото без подписи), не отправляем в GPT
+    if message_text_for_gpt.strip():
+        result = await check_with_gpt(message_text_for_gpt, client)
+    else:
+        # Для сообщений без текста (только медиа) можно задать поведение по умолчанию
+        # Например, считать их мусором, если нет текстового описания
+        result = "мусор"
 
     messages_to_forward = [event.message]
     if event.message.grouped_id:
@@ -152,13 +162,13 @@ async def handle_message(event, client):
     if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
         try:
             entity = await client.get_entity(PeerChannel(event.message.fwd_from.from_id.channel_id))
-            source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
+            source = f"Источник: [{entity.title}](https://t.me/{entity.username})" if entity.username else f"Источник: {entity.title}"
         except:
             source = f"Источник: канал {event.message.fwd_from.from_id.channel_id}"
     else:
         try:
             entity = await client.get_entity(event.chat_id)
-            source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
+            source = f"Источник: [{entity.title}](https://t.me/{entity.username})" if entity.username else f"Источник: {entity.title}"
         except:
             source = f"Источник: канал {event.chat_id}"
 
@@ -167,31 +177,44 @@ async def handle_message(event, client):
     text_buffer = ""
     media = []
 
+    # <--- ИЗМЕНЕНИЕ 2: Собираем текст в формате Markdown для сохранения форматирования
     for msg in messages_to_forward:
         if msg.text:
-            text_buffer += msg.text.strip() + "\n"
+            # Конвертируем текст и форматирование в Markdown и добавляем
+            # Два переноса строки для лучшего разделения между частями альбома
+            text_buffer += get_message_text(msg, 'md').strip() + "\n\n"
         if msg.media:
             media.append(msg.media)
 
     text_buffer = text_buffer.strip()
+    
+    # Максимальная длина подписи к медиа ~1024, для текста ~4096. 
+    # Берем с запасом.
     max_text_len = 1000 if media else 4000
 
     chunks = [text_buffer[i:i+max_text_len] for i in range(0, len(text_buffer), max_text_len)]
+    
+    # Добавляем источник в конец последнего чанка
     if chunks:
+        # Добавляем источник в markdown-формате для кликабельности
         chunks[-1] += f"\n\n{source}"
+    # Если текста не было, но есть медиа, источник будет в caption
+    elif media:
+        chunks.append(f"\n\n{source}")
 
+    # <--- ИЗМЕНЕНИЕ 3: Отправляем с parse_mode='md'
     if media:
         try:
-            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False)
+            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='md')
             for part in chunks[1:]:
-                await client.send_message(target_channel, part)
+                await client.send_message(target_channel, part, parse_mode='md')
         except Exception as e:
             print(f"[!] Ошибка отправки медиа: {e}")
-    else:
+    elif chunks: # Убедимся, что есть что отправлять
         for part in chunks:
-            await client.send_message(target_channel, part)
+            await client.send_message(target_channel, part, parse_mode='md')
 
-    print(f"[OK] Копия с источника: {source}")
+    print(f"[OK] Копия с источника: {source.replace('Источник: ', '')} -> Канал: {result}")
 
 # === Запуск клиента
 async def main():
@@ -200,8 +223,16 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
-        await handle_message(event, client)
+        # Обернем в try-except для стабильности
+        try:
+            await handle_message(event, client)
+        except Exception as e:
+            print(f"[!!!] Критическая ошибка в handle_message: {e}")
+            # Можно отправить уведомление об ошибке себе в ЛС или в лог-канал
+            # await client.send_message('me', f'Ошибка в боте: {e}')
 
+
+    print("Бот запущен и слушает новые сообщения...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
