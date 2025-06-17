@@ -3,25 +3,29 @@ import os
 import re
 import pymorphy2
 import g4f
+from g4f.provider import (
+    AnyProvider, Blackbox, Chatai, CohereForAI_C4AI_Command, Copilot,
+    CopilotAccount, Free2GPT, Qwen_Qwen_2_5, Qwen_Qwen_2_5_Max,
+    Qwen_Qwen_2_72B, TeachAnything, WeWordle, Yqcloud
+)
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, PeerChannel
+from telethon.tl.types import MessageEntity
 from config import API_ID, API_HASH, SESSION_NAME
 
-# === Каналы
-CHANNEL_GOOD = 'https.t.me/fbeed1337'
-CHANNEL_TRASH = 'https.t.me/musoradsxx'
-# Максимальная длина сообщений в Telegram
-TEXT_MAX_LEN = 4096
-CAPTION_MAX_LEN = 1024
+# === Константы
+CHANNEL_GOOD = 'https://t.me/fbeed1337'
+CHANNEL_TRASH = 'https://t.me/musoradsxx'
+MAX_CAPTION_LENGTH = 1024
+MAX_MESSAGE_LENGTH = 4096
 
-# === Провайдеры (обновленный список)
+# === Провайдеры GPT (согласно вашему новому списку)
 fallback_providers = [
     g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
     g4f.Provider.Chatai,
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.Copilot,
-    # g4f.Provider.CopilotAccount, # Часто требует аутентификации, может вызывать ошибки
+    g4f.Provider.CopilotAccount,
     g4f.Provider.Free2GPT,
     g4f.Provider.Qwen_Qwen_2_5,
     g4f.Provider.Qwen_Qwen_2_5_Max,
@@ -37,7 +41,7 @@ def sanitize_input(text):
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
 
-# === Лемматизация
+# === Лемматизация (без изменений)
 filter_words = set()
 morph = pymorphy2.MorphAnalyzer(lang='ru')
 
@@ -56,7 +60,7 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Проверка GPT
+# === Проверка GPT (обновленная логика провайдеров)
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
     prompt = (
@@ -82,40 +86,56 @@ async def check_with_gpt(text: str, client) -> str:
         "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
     )
 
-    total = len(fallback_providers)
-
+    # 7. Новая логика вызова провайдеров
     async def call_provider(provider, index):
+        # Попытка 1: без указания модели
         try:
-            # Пытаемся получить список моделей, если его нет - используем дефолтное значение
-            model_name = getattr(provider, "model", "gpt-3.5-turbo")
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     g4f.ChatCompletion.create,
                     provider=provider,
-                    model=model_name,
                     messages=[{"role": "user", "content": prompt}]
-                ),
-                timeout=30
+                ), timeout=30
             )
             result = (response or "").strip().lower()
             result = re.sub(r'[^а-яА-Я]', '', result)
             if result in ['реклама', 'бесполезно', 'полезно']:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__}: {result}")
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ✅ {provider.__name__} (auto): {result}")
+                return result
+        except Exception:
+            pass # Ошибка - это нормально, пробуем следующий вариант
+
+        # Попытка 2: с моделью 'gpt-3.5'
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    g4f.ChatCompletion.create,
+                    provider=provider,
+                    model="gpt-3.5",
+                    messages=[{"role": "user", "content": prompt}]
+                ), timeout=30
+            )
+            result = (response or "").strip().lower()
+            result = re.sub(r'[^а-яА-Я]', '', result)
+            if result in ['реклама', 'бесполезно', 'полезно']:
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ✅ {provider.__name__} (gpt-3.5): {result}")
                 return result
             else:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'")
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ⚠️ {provider.__name__} странный ответ: '{result}'")
+
         except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}")
-        return None
+            await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ❌ {provider.__name__} не сработал: {str(e)[:100]}")
+        
+        return None # Провайдер не смог дать ответ
 
     tasks = [call_provider(p, i) for i, p in enumerate(fallback_providers)]
     raw_results = await asyncio.gather(*tasks)
 
     summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
-    for result in raw_results:
-        if result in summary:
-            summary[result] += 1
-
+    for r in raw_results:
+        if r in summary:
+            summary[r] += 1
+    
     total_valid = sum(summary.values())
     if total_valid == 0:
         await client.send_message(CHANNEL_TRASH, "❌ Ни один GPT-провайдер не дал ответ. Повтор через 30 минут.")
@@ -129,99 +149,91 @@ async def check_with_gpt(text: str, client) -> str:
     else:
         return "мусор"
 
-
-# === Новая функция для получения информации об источнике
-async def get_source_info(event) -> str:
-    """Определяет источник сообщения (оригинал или канал, где оно появилось)."""
+# === Вспомогательные функции для отправки
+async def get_source_info(event, client):
+    """ 3. Определяет истинный источник сообщения (канал, откуда был репост) """
     source_entity = None
-    # Приоритет - оригинальный канал, если это форвард
-    if event.message.fwd_from and isinstance(event.message.fwd_from.from_id, PeerChannel):
+    # Если это репост, берем информацию из него
+    if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
         try:
-            # Получаем полную информацию о канале-источнике
-            source_entity = await event.client.get_entity(event.message.fwd_from.from_id)
+            source_entity = await client.get_entity(event.message.fwd_from.from_id.channel_id)
         except Exception:
-            source_entity = None # Не удалось получить, используем инфо из fwd_from
-            if hasattr(event.message.fwd_from, 'title'):
-                 return f"Источник: {event.message.fwd_from.title}"
+            source_entity = None # Не удалось получить entity
+    # Если не репост, берем инфо из текущего чата
+    elif event.is_channel:
+        source_entity = event.chat
+
+    if source_entity:
+        if getattr(source_entity, 'username', None):
+            return f"https://t.me/{source_entity.username}"
+        else:
+            title = getattr(source_entity, 'title', 'Unknown Channel')
+            channel_id = getattr(source_entity, 'id', 'N/A')
+            return f"{title} (ID: {channel_id})"
+    return "Источник не определен"
 
 
-    # Если не форвард, или не удалось получить инфо, берем текущий чат
-    if not source_entity:
-        source_entity = await event.get_chat()
+async def send_copied_message(client, target_channel, messages_to_forward, source_string):
+    """ 1, 4, 5. Собирает, форматирует и отправляет скопированное сообщение, делит при необходимости """
+    full_text = ""
+    all_entities = []
+    media_files = []
 
-    if hasattr(source_entity, 'username') and source_entity.username:
-        return f"Источник: https://t.me/{source_entity.username}"
-    elif hasattr(source_entity, 'title'):
-        return f"Источник: {source_entity.title} (ID: {source_entity.id})"
-    else:
-        return "Источник: Не определен"
-
-
-# === Новая функция для отправки и разделения сообщений
-async def send_split_message(client, target_channel, text, media, source_link):
-    """Отправляет сообщение, при необходимости разделяя его на части."""
-    text_parts = []
+    # Собираем текст, медиа и сущности форматирования из группы сообщений
+    for msg in sorted(messages_to_forward, key=lambda m: m.id):
+        current_len = len(full_text)
+        if msg.text:
+            text_to_add = msg.text.strip()
+            full_text += text_to_add + "\n"
+            if msg.entities:
+                for entity in msg.entities:
+                    entity.offset += current_len
+                    all_entities.append(entity)
+        if msg.media and not getattr(msg.media, 'poll', None):
+            media_files.append(msg.media)
     
-    # Если есть и текст, и медиа
-    if text.strip() and media:
-        caption = text[:CAPTION_MAX_LEN]
-        remaining_text = text[CAPTION_MAX_LEN:].strip()
+    full_text = full_text.strip()
+    
+    if not full_text and not media_files:
+        return # Пустое сообщение, не отправляем
+
+    # 4. Логика разделения сообщений
+    if media_files:
+        caption = full_text[:MAX_CAPTION_LENGTH]
+        # 5. Сохраняем форматирование для подписи
+        caption_entities = [e for e in all_entities if e.offset < len(caption)]
         
-        # Отправляем первое сообщение с медиа и подписью
-        try:
-            await client.send_file(target_channel, file=media, caption=caption, parse_mode='md')
-            print(f"[OK] Отправлено медиа с подписью в {target_channel}")
-        except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"❗️ Ошибка отправки медиа с подписью: {e}")
-            # Если ошибка, пробуем отправить без форматирования
-            try:
-                await client.send_file(target_channel, file=media, caption=caption)
-            except Exception as e2:
-                 await client.send_message(CHANNEL_TRASH, f"❗️ Повторная ошибка отправки медиа: {e2}")
+        remaining_text = full_text[MAX_CAPTION_LENGTH:].strip()
+        
+        await client.send_file(
+            target_channel,
+            file=media_files,
+            caption=caption,
+            formatting_entities=caption_entities,
+            link_preview=False
+        )
+        
+        text_to_send_later = remaining_text
+    else:
+        text_to_send_later = full_text
 
-        # Если остался текст, делим его на части
-        if remaining_text:
-            for i in range(0, len(remaining_text), TEXT_MAX_LEN):
-                text_parts.append(remaining_text[i:i + TEXT_MAX_LEN])
+    # Добавляем источник в конец оставшегося или полного текста
+    if text_to_send_later:
+        final_text = f"{text_to_send_later}\n\n{source_string}"
+    else:
+        # Если весь текст ушел в подпись к медиа, источник отправляется отдельно
+        final_text = source_string
 
-    # Если только текст
-    elif text.strip():
-        for i in range(0, len(text), TEXT_MAX_LEN):
-            text_parts.append(text[i:i + TEXT_MAX_LEN])
-            
-    # Если только медиа (без текста)
-    elif media:
-         try:
-            # Отправляем медиа без подписи, источник будет в отдельном сообщении
-            await client.send_file(target_channel, file=media, parse_mode='md')
-            print(f"[OK] Отправлено медиа без подписи в {target_channel}")
-         except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"❗️ Ошибка отправки медиа: {e}")
-    
-    # Добавляем источник в последнее сообщение
-    if text_parts:
-        text_parts[-1] = f"{text_parts[-1].strip()}\n\n{source_link}"
-    # Если текста не было вообще (только медиа), отправляем источник отдельно
-    elif media:
-        text_parts.append(source_link)
-
-    # Отправляем текстовые части
-    for i, part in enumerate(text_parts):
-        try:
-            await client.send_message(target_channel, part, parse_mode='md')
-            print(f"[OK] Отправлена текстовая часть {i+1}/{len(text_parts)} в {target_channel}")
-        except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"❗️ Ошибка отправки текста (часть {i+1}): {e}")
-            # Попытка отправить без форматирования
-            try:
-                await client.send_message(target_channel, part)
-            except Exception as e2:
-                await client.send_message(CHANNEL_TRASH, f"❗️ Повторная ошибка отправки текста: {e2}")
+    # Отправляем оставшийся текст, разбивая на части, если нужно
+    while final_text:
+        part_to_send = final_text[:MAX_MESSAGE_LENGTH]
+        final_text = final_text[MAX_MESSAGE_LENGTH:]
+        await client.send_message(target_channel, part_to_send, link_preview=False)
 
 
-# === Обработка сообщений
+# === Основной обработчик сообщений
 async def handle_message(event, client):
-    # 2) Реагируем только на сообщения в каналах
+    # 2. Проверяем, что сообщение из канала, а не из чата или от пользователя
     if not event.is_channel:
         return
 
@@ -231,80 +243,50 @@ async def handle_message(event, client):
         return
 
     message_text = event.message.text or ""
-    # Игнорируем сообщения без текста, если к ним не прикреплены медиа
     if not message_text.strip() and not event.message.media:
         return
-    
-    # Проверяем GPT только если есть текст
-    if message_text.strip():
-        if len(message_text) > 4000: # Обрезаем только для анализа GPT, не для отправки
-            await client.send_message(CHANNEL_TRASH, f"⚠️ Текст для анализа GPT обрезан (было {len(message_text)})")
+        
+    normalized = normalize_text(message_text)
+    if filter_words.intersection(normalized):
+        return
 
-        normalized = normalize_text(message_text)
-        if filter_words.intersection(normalized):
-            print(f"[FILTER] Сообщение отфильтровано по словам.")
-            return
+    result = await check_with_gpt(message_text, client)
 
-        result = await check_with_gpt(message_text, client)
-    else:
-        # Если текста нет, но есть медиа - считаем полезным по умолчанию
-        result = "полезно"
-    
-    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
-
-    # Собираем все сообщения из группы (если они сгруппированы)
-    messages_to_process = [event.message]
+    # Собираем сгруппированные сообщения
+    messages_to_forward = [event.message]
     if event.message.grouped_id:
-        # Увеличиваем диапазон поиска для надежности
-        async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 15, max_id=event.message.id + 15):
+        async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
             if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
-                messages_to_process.append(msg)
+                messages_to_forward.append(msg)
+
+    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
     
-    messages_to_process.sort(key=lambda m: m.id)
+    # 1, 3. Получаем информацию об источнике
+    source_info = await get_source_info(event, client)
+    source_string = f"Источник: {source_info}"
 
-    # 1, 3) Получаем информацию об источнике
-    source_info_text = await get_source_info(event)
+    # 1, 4, 5. Используем новую функцию для копирования и отправки
+    await send_copied_message(client, target_channel, messages_to_forward, source_string)
+    print(f"[OK] Скопировано из источника: {source_info}. Результат: {result}")
 
-    # Собираем весь текст и все медиа из группы сообщений
-    full_text = ""
-    media_files = []
-    for msg in messages_to_process:
-        if msg.text:
-            full_text += msg.text.strip() + "\n\n"
-        if msg.media:
-            media_files.append(msg.media)
-            
-    full_text = full_text.strip()
-
-    # 4, 5) Отправляем сообщение с помощью новой функции
-    print(f"[{result.upper()}] Начинаю копирование из '{source_info_text}' в '{target_channel}'...")
-    await send_split_message(
-        client=client,
-        target_channel=target_channel,
-        text=full_text,
-        media=media_files,
-        source_link=source_info_text
-    )
 
 # === Запуск клиента
 async def main():
-    print("Запуск клиента...")
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    print("Клиент запускается...")
     await client.start()
-    print("Клиент успешно запущен.")
+    print("Клиент запущен и слушает сообщения.")
 
     @client.on(events.NewMessage(incoming=True))
-    async def handler(event: events.NewMessage.Event):
+    async def handler(event):
         try:
             await handle_message(event, client)
         except Exception as e:
-            # Логируем серьезные ошибки, чтобы бот не падал молча
-            print(f"[!!!] КРИТИЧЕСКАЯ ОШИБКА в обработчике: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[!!!] Произошла критическая ошибка в обработчике: {e}")
+            # Можно добавить отправку сообщения об ошибке себе в ЛС или в лог-канал
+            await client.send_message(CHANNEL_TRASH, f"КРИТИЧЕСКАЯ ОШИБКА: {e}")
 
 
-    print("Бот в режиме ожидания новых сообщений...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
