@@ -4,15 +4,17 @@ import re
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, PeerChannel
-from telethon.utils import get_display_text
+from telethon.tl.types import (
+    PeerChannel, MessageEntityBold, MessageEntityItalic,
+    MessageEntityUnderline, MessageEntityStrike, MessageEntitySpoiler,
+    MessageEntityCode, MessageEntityPre, MessageEntityTextUrl,
+    MessageEntityMentionName, MessageEntityUrl
+)
 from config import API_ID, API_HASH, SESSION_NAME
 
-# === Каналы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Провайдеры
 fallback_providers = [
     g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
@@ -29,15 +31,54 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Очистка текста
+morph = pymorphy2.MorphAnalyzer(lang='ru')
+filter_words = set()
+
+def escape_md(text):
+    return re.sub(r'([_*\[\]()~`>#+=|{}.!-])', r'\\\1', text)
+
+def format_entities(text, entities):
+    if not entities:
+        return escape_md(text)
+    result = list(escape_md(text))
+    added = 0
+    for e in sorted(entities, key=lambda x: x.offset):
+        start = e.offset + added
+        end = start + e.length
+
+        wrap = ''
+        if isinstance(e, MessageEntityBold):
+            wrap = ('*', '*')
+        elif isinstance(e, MessageEntityItalic):
+            wrap = ('_', '_')
+        elif isinstance(e, MessageEntityUnderline):
+            wrap = ('__', '__')
+        elif isinstance(e, MessageEntityStrike):
+            wrap = ('~', '~')
+        elif isinstance(e, MessageEntitySpoiler):
+            wrap = ('||', '||')
+        elif isinstance(e, MessageEntityCode):
+            wrap = ('`', '`')
+        elif isinstance(e, MessageEntityPre):
+            wrap = ('```', '```')
+        elif isinstance(e, MessageEntityTextUrl):
+            wrap = (f"[", f"]({escape_md(e.url)})")
+        elif isinstance(e, MessageEntityMentionName):
+            wrap = (f"[", f"](tg://user?id={e.user_id})")
+        elif isinstance(e, MessageEntityUrl):
+            continue  # уже встроено
+        else:
+            continue
+
+        result.insert(start, wrap[0])
+        result.insert(end + 1, wrap[1])
+        added += len(wrap[0]) + len(wrap[1])
+    return ''.join(result)
+
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
-
-# === Лемматизация
-filter_words = set()
-morph = pymorphy2.MorphAnalyzer(lang='ru')
 
 def load_filter_words():
     global filter_words
@@ -54,7 +95,6 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === GPT фильтрация
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
@@ -106,7 +146,6 @@ async def check_with_gpt(text: str, client) -> str:
         return None
 
     results = await asyncio.gather(*[call_provider(p, i) for i, p in enumerate(fallback_providers)])
-
     for r in results:
         if r in summary:
             summary[r] += 1
@@ -120,14 +159,11 @@ async def check_with_gpt(text: str, client) -> str:
     await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}")
     return "полезно" if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]) else "мусор"
 
-# === Обработка сообщений
 async def handle_message(event, client):
     load_filter_words()
 
-    # Только каналы (исключаем чаты и контакты)
     if not isinstance(event.message.to_id, PeerChannel):
         return
-
     if event.poll or event.voice or event.video_note:
         return
 
@@ -141,15 +177,14 @@ async def handle_message(event, client):
 
     result = await check_with_gpt(message_text, client)
 
-    messages_to_forward = [event.message]
+    messages = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
             if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
-                messages_to_forward.append(msg)
-    messages_to_forward.sort(key=lambda m: m.id)
+                messages.append(msg)
+    messages.sort(key=lambda m: m.id)
 
-    # === Определение источника
-    source = ""
+    # === Источник
     if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
         try:
             entity = await client.get_entity(PeerChannel(event.message.fwd_from.from_id.channel_id))
@@ -165,36 +200,34 @@ async def handle_message(event, client):
 
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
-    text_buffer = ""
+    text = ""
     media = []
 
-    for msg in messages_to_forward:
+    for msg in messages:
         if msg.message:
-            formatted = get_display_text(msg)
-            text_buffer += formatted.strip() + "\n"
+            text += format_entities(msg.message, msg.entities).strip() + "\n"
         if msg.media:
             media.append(msg.media)
 
-    text_buffer = text_buffer.strip()
-    max_text_len = 1000 if media else 4000
-    chunks = [text_buffer[i:i+max_text_len] for i in range(0, len(text_buffer), max_text_len)]
+    text = text.strip()
+    max_len = 1000 if media else 4000
+    chunks = [text[i:i+max_len] for i in range(0, len(text), max_len)]
     if chunks:
-        chunks[-1] += f"\n\n{source}"
+        chunks[-1] += f"\n\n{escape_md(source)}"
 
     try:
         if media:
-            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='Markdown')
+            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='MarkdownV2')
             for part in chunks[1:]:
-                await client.send_message(target_channel, part, parse_mode='Markdown')
+                await client.send_message(target_channel, part, parse_mode='MarkdownV2')
         else:
             for part in chunks:
-                await client.send_message(target_channel, part, parse_mode='Markdown')
+                await client.send_message(target_channel, part, parse_mode='MarkdownV2')
     except Exception as e:
         print(f"[!] Ошибка при отправке: {e}")
 
     print(f"[OK] Копия с источника: {source}")
 
-# === Запуск клиента
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
