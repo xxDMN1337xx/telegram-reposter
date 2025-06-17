@@ -76,24 +76,33 @@ async def check_with_gpt(text, client):
     total = len(fallback_providers)
 
     async def call(provider, index):
-        for model in [None, "gpt-3.5"]:
-            try:
-                args = {"provider": provider, "messages": [{"role": "user", "content": prompt}]}
-                if model:
-                    args["model"] = model
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(g4f.ChatCompletion.create, **args),
-                    timeout=25
-                )
-                result = re.sub(r'[^а-яА-Я]', '', (result or "").strip().lower())
-                if result in ['реклама', 'бесполезно', 'полезно']:
-                    await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__}: {result}")
-                    return result
-                else:
-                    await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__}: странный ответ: '{result}'")
-                    return None
-            except Exception as e:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ({'без model' if model is None else model}): ошибка: {str(e)[:100]}")
+        try:
+            models = getattr(provider, "models", [])
+            tried_models = [None] + models  # сначала пробуем без model, потом по списку
+
+            for model in tried_models:
+                try:
+                    args = {"provider": provider, "messages": [{"role": "user", "content": prompt}]}
+                    if model: args["model"] = model
+
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(g4f.ChatCompletion.create, **args),
+                        timeout=25
+                    )
+
+                    result = re.sub(r'[^а-яА-Я]', '', (result or "").strip().lower())
+                    if result in ['реклама', 'бесполезно', 'полезно']:
+                        await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__}: {result}")
+                        return result
+                    else:
+                        await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__}: странный ответ: '{result}'")
+                        return None
+
+                except Exception as e:
+                    model_label = "без model" if model is None else model
+                    await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ({model_label}): ошибка: {str(e)[:100]}")
+        except Exception as e:
+            await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__}: фатальная ошибка: {str(e)[:100]}")
         return None
 
     raw_results = await asyncio.gather(*(call(p, i) for i, p in enumerate(fallback_providers)))
