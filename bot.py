@@ -6,7 +6,6 @@ import g4f
 from html import escape
 from telethon import TelegramClient, events
 from telethon.tl.types import *
-from telethon.utils import _formatted_text  # ✅ используем Telethon встроенный HTML-рендер
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -25,7 +24,60 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Фильтрация
+# === HTML форматирование
+def entities_to_html(text, entities):
+    if not text:
+        return ""
+    if not entities:
+        return escape(text)
+
+    result = []
+    current_pos = 0
+    tag_map = {
+        MessageEntityBold: "b",
+        MessageEntityItalic: "i",
+        MessageEntityUnderline: "u",
+        MessageEntityStrike: "s",
+        MessageEntityCode: "code",
+        MessageEntityPre: "pre",
+        MessageEntitySpoiler: "tg-spoiler",
+        MessageEntityBlockquote: "blockquote",
+    }
+
+    entities = sorted(entities, key=lambda e: e.offset)
+
+    for entity in entities:
+        start = entity.offset
+        end = start + entity.length
+
+        # текст до entity
+        if current_pos < start:
+            result.append(escape(text[current_pos:start]))
+
+        segment = escape(text[start:end])
+
+        if isinstance(entity, MessageEntityTextUrl):
+            result.append(f'<a href="{escape(entity.url)}">{segment}</a>')
+        elif isinstance(entity, MessageEntityUrl):
+            result.append(f'<a href="{segment}">{segment}</a>')
+        elif isinstance(entity, MessageEntityMentionName):
+            result.append(f'<a href="tg://user?id={entity.user_id}">{segment}</a>')
+        else:
+            tag = tag_map.get(type(entity))
+            if tag:
+                result.append(f"<{tag}>{segment}</{tag}>")
+            else:
+                result.append(segment)
+
+        current_pos = end
+
+    # остаток текста
+    if current_pos < len(text):
+        result.append(escape(text[current_pos:]))
+
+    return ''.join(result)
+
+# === Текстовая фильтрация
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
@@ -49,26 +101,18 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === HTML-конвертация через Telethon
-def entities_to_html(text, entities):
-    return _formatted_text(text or "", entities or [], 'html')
-
 # === GPT-фильтрация
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "Тебе НЕЛЬЗЯ допускать к публикации:\n"
-        "- личные посты\n- общая реклама\n- бесполезные тексты\n- интервью\n"
-        "- розыгрыши\n- вечеринки, конференции\n- лонгриды без конкретики\n\n"
-        "Публиковать можно только:\n"
-        "- кейсы, схемы, инсайты, цифры\n- связки, источники трафика\n"
-        "- инструменты, API, скрипты\n- обзоры ИИ-инструментов\n- новости платформ\n\n"
-        f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
+        "Запрещено публиковать:\n- личные посты\n- бесполезные тексты\n- общие рассуждения\n"
+        "- конкурсы, тусовки, философия, лонгриды\n\n"
+        "Разрешено публиковать:\n- кейсы, связки, инструменты\n"
+        "- скрипты, цифры, API, инсайты\n\n"
+        f"Анализируй текст:\n\"{clean_text}\"\n\n"
         "Ответь одним словом: реклама, бесполезно, полезно."
     )
-
-    total = len(fallback_providers)
 
     async def call_provider(provider, index):
         try:
@@ -84,23 +128,22 @@ async def check_with_gpt(text: str, client) -> str:
             result = (response or "").strip().lower()
             result = re.sub(r'[^а-яА-Я]', '', result)
             if result in ['реклама', 'бесполезно', 'полезно']:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__}: {result}")
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ✅ {provider.__name__}: {result}")
                 return result
             else:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__}: '{result}'")
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ⚠️ {provider.__name__}: '{result}'")
         except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}")
+            await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ❌ {provider.__name__} ошибка: {str(e)[:100]}")
         return None
 
-    raw_results = await asyncio.gather(*[call_provider(p, i) for i, p in enumerate(fallback_providers)])
+    results = await asyncio.gather(*[call_provider(p, i) for i, p in enumerate(fallback_providers)])
     summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
-    for r in raw_results:
+    for r in results:
         if r in summary:
             summary[r] += 1
 
-    total_valid = sum(summary.values())
-    if total_valid == 0:
-        await client.send_message(CHANNEL_TRASH, "❌ Ни один GPT-провайдер не дал ответ. Повтор через 30 минут.")
+    if sum(summary.values()) == 0:
+        await client.send_message(CHANNEL_TRASH, "❌ Ни один GPT-провайдер не дал ответ. Повтор через 30 мин.")
         await asyncio.sleep(1800)
         return await check_with_gpt(text, client)
 
@@ -116,29 +159,25 @@ async def handle_message(event, client):
     if event.poll or event.voice or event.video_note:
         return
 
-    message_text = event.message.text or ""
-    if not message_text.strip():
+    if not (event.message.message or "").strip():
         return
 
-    if len(message_text) > 2000:
-        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
-
-    normalized = normalize_text(message_text)
+    normalized = normalize_text(event.message.message)
     if filter_words.intersection(normalized):
         return
 
-    result = await check_with_gpt(message_text, client)
+    result = await check_with_gpt(event.message.message, client)
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
-    messages_to_forward = [event.message]
+    # === Группировка
+    messages = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
             if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
-                messages_to_forward.append(msg)
-    messages_to_forward.sort(key=lambda m: m.id)
+                messages.append(msg)
+    messages.sort(key=lambda m: m.id)
 
     # === Источник
-    source = ""
     try:
         fwd = event.message.fwd_from
         if fwd and isinstance(fwd.from_id, PeerChannel):
@@ -149,17 +188,17 @@ async def handle_message(event, client):
     except:
         source = f"Источник: канал {event.chat_id}"
 
-    # === Текст и медиа
-    media = [msg.media for msg in messages_to_forward if msg.media]
-    main_msg = messages_to_forward[0]
-    html_text = entities_to_html(main_msg.message or "", main_msg.entities or [])
-    full_text = html_text.strip() + f"\n\n{escape(source)}"
+    media = [msg.media for msg in messages if msg.media]
+    main = messages[0]
+    html = entities_to_html(main.message or "", main.entities or [])
+    html += f"\n\n{escape(source)}"
+
     max_len = 1000 if media else 4000
-    chunks = [full_text[i:i+max_len] for i in range(0, len(full_text), max_len)]
+    chunks = [html[i:i+max_len] for i in range(0, len(html), max_len)]
 
     if media:
         try:
-            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='html')
+            await client.send_file(target_channel, file=media, caption=chunks[0], parse_mode='html', force_document=False)
             for chunk in chunks[1:]:
                 await client.send_message(target_channel, chunk, parse_mode='html')
         except Exception as e:
