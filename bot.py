@@ -24,13 +24,12 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Очистка текста
+# === Фильтрация
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
 
-# === Лемматизация
 filter_words = set()
 morph = pymorphy2.MorphAnalyzer(lang='ru')
 
@@ -49,64 +48,64 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === HTML форматирование из entities
-
+# === HTML-конвертация
 def entities_to_html(text, entities):
     if not entities:
-        return escape(text)
+        return escape(text or "")
 
-    offsets = []
-    for ent in entities:
-        start, end = ent.offset, ent.offset + ent.length
-        tag_open, tag_close = '', ''
+    entities = sorted(entities, key=lambda e: e.offset)
+    result = []
+    last = 0
 
-        if isinstance(ent, MessageEntityBold):
-            tag_open, tag_close = '<b>', '</b>'
-        elif isinstance(ent, MessageEntityItalic):
-            tag_open, tag_close = '<i>', '</i>'
-        elif isinstance(ent, MessageEntityUnderline):
-            tag_open, tag_close = '<u>', '</u>'
-        elif isinstance(ent, MessageEntityStrike):
-            tag_open, tag_close = '<s>', '</s>'
-        elif isinstance(ent, MessageEntityCode):
-            tag_open, tag_close = '<code>', '</code>'
-        elif isinstance(ent, MessageEntityPre):
-            tag_open, tag_close = '<pre>', '</pre>'
-        elif isinstance(ent, MessageEntityTextUrl):
-            tag_open, tag_close = f'<a href="{escape(ent.url)}">', '</a>'
-        elif isinstance(ent, MessageEntityUrl):
-            url = escape(text[start:end])
-            tag_open, tag_close = f'<a href="{url}">', '</a>'
-        elif isinstance(ent, MessageEntityMentionName):
-            tag_open, tag_close = f'<a href="tg://user?id={ent.user_id}">', '</a>'
-        elif isinstance(ent, MessageEntitySpoiler):
-            tag_open, tag_close = '<tg-spoiler>', '</tg-spoiler>'
-        elif isinstance(ent, MessageEntityBlockquote):
-            tag_open, tag_close = '<blockquote>', '</blockquote>'
+    for e in entities:
+        result.append(escape(text[last:e.offset]))
+        content = escape(text[e.offset:e.offset + e.length])
 
-        offsets.append((start, tag_open))
-        offsets.append((end, tag_close))
+        if isinstance(e, MessageEntityBold):
+            result.append(f"<b>{content}</b>")
+        elif isinstance(e, MessageEntityItalic):
+            result.append(f"<i>{content}</i>")
+        elif isinstance(e, MessageEntityUnderline):
+            result.append(f"<u>{content}</u>")
+        elif isinstance(e, MessageEntityStrike):
+            result.append(f"<s>{content}</s>")
+        elif isinstance(e, MessageEntityCode):
+            result.append(f"<code>{content}</code>")
+        elif isinstance(e, MessageEntityPre):
+            result.append(f"<pre>{content}</pre>")
+        elif isinstance(e, MessageEntityTextUrl):
+            result.append(f'<a href="{escape(e.url)}">{content}</a>')
+        elif isinstance(e, MessageEntityUrl):
+            result.append(f'<a href="{content}">{content}</a>')
+        elif isinstance(e, MessageEntityMentionName):
+            result.append(f'<a href="tg://user?id={e.user_id}">{content}</a>')
+        elif isinstance(e, MessageEntitySpoiler):
+            result.append(f'<tg-spoiler>{content}</tg-spoiler>')
+        elif isinstance(e, MessageEntityBlockquote):
+            result.append(f'<blockquote>{content}</blockquote>')
+        else:
+            result.append(content)
 
-    offsets.sort(key=lambda x: x[0], reverse=True)
-    text = escape(text)
-    for pos, tag in offsets:
-        text = text[:pos] + tag + text[pos:]
+        last = e.offset + e.length
 
-    return text
+    result.append(escape(text[last:]))
+    return ''.join(result)
 
-# === GPT фильтрация
+# === GPT-фильтрация
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
-
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
-        "- личные посты...\n\n"
+        "Тебе НЕЛЬЗЯ допускать к публикации:\n"
+        "- личные посты\n- общая реклама\n- бесполезные тексты\n- интервью\n"
+        "- розыгрыши\n- вечеринки, конференции\n- лонгриды без конкретики\n\n"
+        "Публиковать можно только:\n"
+        "- кейсы, схемы, инсайты, цифры\n- связки, источники трафика\n"
+        "- инструменты, API, скрипты\n- обзоры ИИ-инструментов\n- новости платформ\n\n"
         f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
-        "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
+        "Ответь одним словом: реклама, бесполезно, полезно."
     )
 
-    results = []
     total = len(fallback_providers)
 
     async def call_provider(provider, index):
@@ -126,18 +125,16 @@ async def check_with_gpt(text: str, client) -> str:
                 await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__}: {result}")
                 return result
             else:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'")
+                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__}: '{result}'")
         except Exception as e:
             await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}")
         return None
 
-    tasks = [call_provider(p, i) for i, p in enumerate(fallback_providers)]
-    raw_results = await asyncio.gather(*tasks)
-
+    raw_results = await asyncio.gather(*[call_provider(p, i) for i, p in enumerate(fallback_providers)])
     summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
-    for result in raw_results:
-        if result in summary:
-            summary[result] += 1
+    for r in raw_results:
+        if r in summary:
+            summary[r] += 1
 
     total_valid = sum(summary.values())
     if total_valid == 0:
@@ -170,7 +167,9 @@ async def handle_message(event, client):
         return
 
     result = await check_with_gpt(message_text, client)
+    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
+    # Группировка
     messages_to_forward = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
@@ -178,44 +177,40 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
+    # Источник
+    source = ""
     try:
-        entity = await client.get_entity(event.chat_id)
+        fwd = event.message.fwd_from
+        if fwd and isinstance(fwd.from_id, PeerChannel):
+            entity = await client.get_entity(fwd.from_id)
+        else:
+            entity = await client.get_entity(event.chat_id)
         source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
     except:
         source = f"Источник: канал {event.chat_id}"
 
-    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
-
-    text_buffer = ""
-    media = []
-
-    for msg in messages_to_forward:
-        if msg.text:
-            text_buffer += entities_to_html(msg.text, msg.entities) + "\n"
-        if msg.media:
-            media.append(msg.media)
-
-    text_buffer = text_buffer.strip()
-    max_text_len = 1000 if media else 3000
-
-    chunks = [text_buffer[i:i+max_text_len] for i in range(0, len(text_buffer), max_text_len)]
-    if chunks:
-        chunks[-1] += f"\n\n{escape(source)}"
+    # === Основной текст + media
+    media = [msg.media for msg in messages_to_forward if msg.media]
+    main_msg = messages_to_forward[0]
+    main_text = entities_to_html(main_msg.message or "", main_msg.entities or [])
+    full_text = main_text.strip() + f"\n\n{escape(source)}"
+    max_len = 1000 if media else 4000
+    chunks = [full_text[i:i+max_len] for i in range(0, len(full_text), max_len)]
 
     if media:
         try:
             await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='html')
-            for part in chunks[1:]:
-                await client.send_message(target_channel, part, parse_mode='html')
+            for chunk in chunks[1:]:
+                await client.send_message(target_channel, chunk, parse_mode='html')
         except Exception as e:
             print(f"[!] Ошибка отправки медиа: {e}")
     else:
-        for part in chunks:
-            await client.send_message(target_channel, part, parse_mode='html')
+        for chunk in chunks:
+            await client.send_message(target_channel, chunk, parse_mode='html')
 
     print(f"[OK] Копия с источника: {source}")
 
-# === Запуск клиента
+# === Запуск
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
