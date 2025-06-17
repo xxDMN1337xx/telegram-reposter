@@ -113,27 +113,56 @@ async def check_with_gpt(text: str, client) -> str:
     total = len(fallback_providers)
 
     async def call_provider(provider, index):
+    try:
+        # Сначала пробуем без model
         try:
-            model = getattr(provider, "models", ["gpt-3.5"])[0]
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     g4f.ChatCompletion.create,
                     provider=provider,
-                    model=model,
                     messages=[{"role": "user", "content": prompt}]
                 ),
                 timeout=30
             )
-            result = (response or "").strip().lower()
-            result = re.sub(r'[^а-яА-Я]', '', result)
-            if result in ['реклама', 'бесполезно', 'полезно']:
-                await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}"), parse_mode='MarkdownV2')
-                return result
-            else:
-                await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'"), parse_mode='MarkdownV2')
         except Exception as e:
-            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}"), parse_mode='MarkdownV2')
-        return None
+            # Если не сработало — пробуем с model="gpt-3.5"
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        g4f.ChatCompletion.create,
+                        provider=provider,
+                        model="gpt-3.5",
+                        messages=[{"role": "user", "content": prompt}]
+                    ),
+                    timeout=30
+                )
+            except Exception as e2:
+                # Если не сработало вообще — пропускаем провайдера
+                return None
+
+        result = (response or "").strip().lower()
+        result = re.sub(r'[^а-яА-Я]', '', result)
+        if result in ['реклама', 'бесполезно', 'полезно']:
+            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ✅ {provider.__name__}: {result}"), parse_mode='markdown_v2')
+            return result
+        else:
+            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'"), parse_mode='markdown_v2')
+    except Exception as e:
+        await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}"), parse_mode='markdown_v2')
+    return None
+
+            raise
+        result = (response or "").strip().lower()
+        result = re.sub(r'[^а-яА-Я]', '', result)
+        if result in ['реклама', 'бесполезно', 'полезно']:
+            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}"), parse_mode='markdown_v2')
+            return result
+        else:
+            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'"), parse_mode='markdown_v2')
+    except Exception as e:
+        await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}"), parse_mode='markdown_v2')
+    return None
+
 
     tasks = [call_provider(p, i) for i, p in enumerate(fallback_providers)]
     raw_results = await asyncio.gather(*tasks)
