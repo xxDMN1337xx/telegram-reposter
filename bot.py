@@ -49,7 +49,7 @@ def fix_markdown_links(text):
     return re.sub(r'\*\*(.+?)\*\s*\((https?://[^\s)]+)\)', r'[\1](\2)', text)
 
 async def check_with_gpt(text, client):
-    clean_text = sanitize_input(text)  # <== ДОБАВЬ ЭТУ СТРОКУ
+    clean_text = sanitize_input(text)
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
         "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
@@ -72,24 +72,26 @@ async def check_with_gpt(text, client):
         f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
         "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
     )
-    results = []
-    total = len(fallback_providers)
 
     async def call(provider, index):
         try:
-            result = await g4f.ChatCompletion.create_async(
-                model=g4f.models.default,
-                provider=provider,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=25
+            result = await asyncio.wait_for(
+                g4f.ChatCompletion.create_async(
+                    model=g4f.models.default,
+                    provider=provider,
+                    messages=[{"role": "user", "content": prompt}]
+                ),
+                timeout=30
             )
-            result = (result or "").strip().lower()
+            result = (result or '').strip().lower()
             result = re.sub(r'[^а-яА-Я]', '', result)
             if result in ['реклама', 'бесполезно', 'полезно']:
                 await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ✅ {provider.__name__}: {result}")
                 return result
             else:
                 await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ⚠️ {provider.__name__}: странный ответ: '{result}'")
+        except asyncio.TimeoutError:
+            await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ❌ {provider.__name__}: timeout")
         except Exception as e:
             await client.send_message(CHANNEL_TRASH, f"{index+1}/{len(fallback_providers)} ❌ {provider.__name__}: ошибка: {str(e)[:100]}")
         return None
@@ -115,9 +117,11 @@ async def handle_message(event, client):
 
     load_filter_words()
     text = (event.message.text or "").strip()
-    if not text: return
+    if not text:
+        return
     normalized = normalize_text(text)
-    if filter_words.intersection(normalized): return
+    if filter_words.intersection(normalized):
+        return
 
     result = await check_with_gpt(text, client)
     messages = [event.message]
@@ -147,8 +151,10 @@ async def handle_message(event, client):
     media_files = []
 
     for msg in messages:
-        if msg.text: full_text += msg.text.strip() + "\n"
-        if msg.media: media_files.append(msg.media)
+        if msg.text:
+            full_text += msg.text.strip() + "\n"
+        if msg.media:
+            media_files.append(msg.media)
 
     full_text = fix_markdown_links(full_text.strip())
     full_text += f"\n\nИсточник: {source_link}"
