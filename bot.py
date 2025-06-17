@@ -7,18 +7,9 @@ from telethon import TelegramClient, events
 from telethon.tl.types import Message
 from config import API_ID, API_HASH, SESSION_NAME
 
-# === Каналы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
-# === Источники с копированием (channel_id: ссылка)
-COPY_CHANNELS = {
-    1672980976: "https://t.me/piratecpa",      # piratecpa, piratcpa, arbitrazh_traffika, web3traff
-    2530485449: "https://t.me/huihuihui111111111111",
-    2101853050: "https://t.me/sapogcpa"
-}
-
-# === Провайдеры
 fallback_providers = [
     g4f.Provider.Blackbox,
     g4f.Provider.ChatGLM,
@@ -31,13 +22,11 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Очистка текста
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
 
-# === Лемматизация
 filter_words = set()
 morph = pymorphy2.MorphAnalyzer(lang='ru')
 
@@ -56,7 +45,6 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === Проверка GPT
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
@@ -131,8 +119,11 @@ async def check_with_gpt(text: str, client) -> str:
     else:
         return "мусор"
 
-# === Обработка сообщений
 async def handle_message(event, client):
+    # Обрабатываем только каналы, чаты пропускаем
+    if not getattr(event, "is_channel", False):
+        return
+
     load_filter_words()
 
     if event.poll or event.voice or event.video_note:
@@ -158,53 +149,44 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    # === Определение, нужно ли копировать (по channel_id или fwd_from.channel_id)
-    original_channel_id = None
-    if getattr(event.chat, "id", None) in COPY_CHANNELS:
-        original_channel_id = event.chat.id
-    elif event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
-        channel_id = event.message.fwd_from.from_id.channel_id
-        if channel_id in COPY_CHANNELS:
-            original_channel_id = channel_id
+    # Автоматически определяем источник (username, id или title)
+    chat = await event.get_chat()
+    if hasattr(chat, "username") and chat.username:
+        source_url = f"https://t.me/{chat.username}"
+    else:
+        source_url = f"Канал: {getattr(chat, 'title', 'Без названия')} (ID: {chat.id})"
 
-    is_copy = original_channel_id is not None
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
-    if is_copy:
-        source_url = COPY_CHANNELS[original_channel_id]
-        media_files = []
-        full_text = ""
+    media_files = []
+    full_text = ""
 
-        for msg in messages_to_forward:
-            if msg.media:
-                media_files.append(msg.media)
-            if msg.text:
-                full_text += msg.text.strip() + "\n"
+    for msg in messages_to_forward:
+        if msg.media:
+            media_files.append(msg.media)
+        if msg.text:
+            full_text += msg.text.strip() + "\n"
 
-        if full_text.strip():
-            full_text = full_text.strip() + f"\n\nИсточник: {source_url}"
-        else:
-            full_text = f"Источник: {source_url}"
-
-        if media_files:
-            try:
-                await client.send_file(
-                    target_channel,
-                    file=media_files,
-                    caption=full_text,
-                    force_document=False
-                )
-            except Exception as e:
-                print(f"[!] Ошибка отправки медиа: {e}")
-        else:
-            await client.send_message(target_channel, full_text)
-
-        print(f"[OK] Копия с источника: {source_url}")
+    if full_text.strip():
+        full_text = full_text.strip() + f"\n\nИсточник: {source_url}"
     else:
-        await client.forward_messages(target_channel, messages=messages_to_forward, from_peer=event.chat_id)
-        print("[OK] Репост обычным способом")
+        full_text = f"Источник: {source_url}"
 
-# === Запуск клиента
+    if media_files:
+        try:
+            await client.send_file(
+                target_channel,
+                file=media_files,
+                caption=full_text,
+                force_document=False
+            )
+        except Exception as e:
+            print(f"[!] Ошибка отправки медиа: {e}")
+    else:
+        await client.send_message(target_channel, full_text)
+
+    print(f"[OK] Копия с источника: {source_url}")
+
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
