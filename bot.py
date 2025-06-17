@@ -24,7 +24,7 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === HTML с вложенными тегами
+# === HTML с вложенными тегами и учётом первой буквы
 def entities_to_html_nested(text, entities):
     if not text:
         return ""
@@ -49,20 +49,23 @@ def entities_to_html_nested(text, entities):
     for ent in entities or []:
         start = ent.offset
         end = ent.offset + ent.length
-
         opens.setdefault(start, []).append(ent)
         closes.setdefault(end, []).append(ent)
 
     result = []
-    for i, char in enumerate(text):
+    open_stack = []
+    i = 0
+    length = len(text)
+
+    while i < length:
         if i in closes:
             for ent in reversed(closes[i]):
                 if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
-                    result.append('</a>')
+                    result.append("</a>")
                 else:
                     tag = tag_map.get(type(ent))
                     if tag:
-                        result.append(f'</{tag}>')
+                        result.append(f"</{tag}>")
 
         if i in opens:
             for ent in opens[i]:
@@ -76,18 +79,19 @@ def entities_to_html_nested(text, entities):
                 else:
                     tag = tag_map.get(type(ent))
                     if tag:
-                        result.append(f'<{tag}>')
+                        result.append(f"<{tag}>")
 
-        result.append(escape(char))
+        result.append(escape(text[i]))
+        i += 1
 
-    if len(text) in closes:
-        for ent in reversed(closes[len(text)]):
+    if length in closes:
+        for ent in reversed(closes[length]):
             if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
-                result.append('</a>')
+                result.append("</a>")
             else:
                 tag = tag_map.get(type(ent))
                 if tag:
-                    result.append(f'</{tag}>')
+                    result.append(f"</{tag}>")
 
     return ''.join(result)
 
@@ -120,11 +124,9 @@ async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "Запрещено публиковать:\n- личные посты\n- бесполезные тексты\n- общие рассуждения\n"
-        "- конкурсы, тусовки, философия, лонгриды\n\n"
-        "Разрешено публиковать:\n- кейсы, связки, инструменты\n"
-        "- скрипты, цифры, API, инсайты\n\n"
-        f"Анализируй текст:\n\"{clean_text}\"\n\n"
+        "Запрещено публиковать:\n- личные посты\n- бесполезные тексты\n- философия, конкурсы\n\n"
+        "Разрешено:\n- кейсы, цифры, связки, схемы, API, скрипты, ИИ-инструменты\n\n"
+        f"Анализируй:\n\"{clean_text}\"\n\n"
         "Ответь одним словом: реклама, бесполезно, полезно."
     )
 
