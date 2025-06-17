@@ -15,8 +15,8 @@ from config import API_ID, API_HASH, SESSION_NAME
 # === Константы
 CHANNEL_GOOD = 'https://t.me/fbeed1337'
 CHANNEL_TRASH = 'https://t.me/musoradsxx'
-MAX_CAPTION_LENGTH = 1024
-MAX_MESSAGE_LENGTH = 4096
+MAX_CAPTION_LENGTH = 1000
+MAX_MESSAGE_LENGTH = 4000
 
 # === Провайдеры GPT (согласно вашему новому списку)
 fallback_providers = [
