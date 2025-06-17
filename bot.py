@@ -25,7 +25,7 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Коррекция начала entity к началу слова
+# === Расширение entity до начала слова
 def adjust_entities_to_word_start(text, entities):
     updated = []
     for ent in entities or []:
@@ -35,7 +35,6 @@ def adjust_entities_to_word_start(text, entities):
 
         start = ent.offset
         end = start + ent.length
-
         while start > 0 and text[start - 1] not in string.whitespace + string.punctuation:
             start -= 1
 
@@ -48,10 +47,26 @@ def adjust_entities_to_word_start(text, entities):
             updated.append(new_ent)
         else:
             updated.append(ent)
-
     return updated
 
-# === HTML форматирование с вложенностью
+# === Приоритет вложенности
+def sort_entities_for_opening(entities):
+    priority = {
+        MessageEntityBold: 1,
+        MessageEntityItalic: 1,
+        MessageEntityUnderline: 1,
+        MessageEntityStrike: 1,
+        MessageEntityCode: 1,
+        MessageEntityPre: 1,
+        MessageEntitySpoiler: 1,
+        MessageEntityBlockquote: 1,
+        MessageEntityTextUrl: 2,
+        MessageEntityUrl: 2,
+        MessageEntityMentionName: 2,
+    }
+    return sorted(entities, key=lambda e: priority.get(type(e), 3))
+
+# === HTML-рендер с вложенностью и приоритетом
 def entities_to_html_nested(text, entities):
     if not text:
         return ""
@@ -83,11 +98,9 @@ def entities_to_html_nested(text, entities):
 
     result = []
     i = 0
-    length = len(text)
-
-    while i < length:
+    while i < len(text):
         if i in closes:
-            for ent in reversed(closes[i]):
+            for ent in reversed(sort_entities_for_opening(closes[i])):
                 if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                     result.append("</a>")
                 else:
@@ -96,7 +109,7 @@ def entities_to_html_nested(text, entities):
                         result.append(f"</{tag}>")
 
         if i in opens:
-            for ent in opens[i]:
+            for ent in sort_entities_for_opening(opens[i]):
                 if isinstance(ent, MessageEntityTextUrl):
                     result.append(f'<a href="{escape(ent.url)}">')
                 elif isinstance(ent, MessageEntityMentionName):
@@ -112,8 +125,8 @@ def entities_to_html_nested(text, entities):
         result.append(escape(text[i]))
         i += 1
 
-    if length in closes:
-        for ent in reversed(closes[length]):
+    if len(text) in closes:
+        for ent in reversed(sort_entities_for_opening(closes[len(text)])):
             if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                 result.append("</a>")
             else:
@@ -123,7 +136,7 @@ def entities_to_html_nested(text, entities):
 
     return ''.join(result)
 
-# === Фильтрация
+# === Очистка текста
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
