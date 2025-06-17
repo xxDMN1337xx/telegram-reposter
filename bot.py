@@ -24,15 +24,11 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === HTML форматирование
-def entities_to_html(text, entities):
+# === HTML с вложенными тегами
+def entities_to_html_nested(text, entities):
     if not text:
         return ""
-    if not entities:
-        return escape(text)
 
-    result = []
-    current_pos = 0
     tag_map = {
         MessageEntityBold: "b",
         MessageEntityItalic: "i",
@@ -42,38 +38,56 @@ def entities_to_html(text, entities):
         MessageEntityPre: "pre",
         MessageEntitySpoiler: "tg-spoiler",
         MessageEntityBlockquote: "blockquote",
+        MessageEntityTextUrl: "a",
+        MessageEntityUrl: "a",
+        MessageEntityMentionName: "a",
     }
 
-    entities = sorted(entities, key=lambda e: e.offset)
+    opens = {}
+    closes = {}
 
-    for entity in entities:
-        start = entity.offset
-        end = start + entity.length
+    for ent in entities or []:
+        start = ent.offset
+        end = ent.offset + ent.length
 
-        # текст до entity
-        if current_pos < start:
-            result.append(escape(text[current_pos:start]))
+        opens.setdefault(start, []).append(ent)
+        closes.setdefault(end, []).append(ent)
 
-        segment = escape(text[start:end])
+    result = []
+    for i, char in enumerate(text):
+        if i in closes:
+            for ent in reversed(closes[i]):
+                if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
+                    result.append('</a>')
+                else:
+                    tag = tag_map.get(type(ent))
+                    if tag:
+                        result.append(f'</{tag}>')
 
-        if isinstance(entity, MessageEntityTextUrl):
-            result.append(f'<a href="{escape(entity.url)}">{segment}</a>')
-        elif isinstance(entity, MessageEntityUrl):
-            result.append(f'<a href="{segment}">{segment}</a>')
-        elif isinstance(entity, MessageEntityMentionName):
-            result.append(f'<a href="tg://user?id={entity.user_id}">{segment}</a>')
-        else:
-            tag = tag_map.get(type(entity))
-            if tag:
-                result.append(f"<{tag}>{segment}</{tag}>")
+        if i in opens:
+            for ent in opens[i]:
+                if isinstance(ent, MessageEntityTextUrl):
+                    result.append(f'<a href="{escape(ent.url)}">')
+                elif isinstance(ent, MessageEntityMentionName):
+                    result.append(f'<a href="tg://user?id={ent.user_id}">')
+                elif isinstance(ent, MessageEntityUrl):
+                    url = escape(text[ent.offset:ent.offset + ent.length])
+                    result.append(f'<a href="{url}">')
+                else:
+                    tag = tag_map.get(type(ent))
+                    if tag:
+                        result.append(f'<{tag}>')
+
+        result.append(escape(char))
+
+    if len(text) in closes:
+        for ent in reversed(closes[len(text)]):
+            if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
+                result.append('</a>')
             else:
-                result.append(segment)
-
-        current_pos = end
-
-    # остаток текста
-    if current_pos < len(text):
-        result.append(escape(text[current_pos:]))
+                tag = tag_map.get(type(ent))
+                if tag:
+                    result.append(f'</{tag}>')
 
     return ''.join(result)
 
@@ -190,8 +204,7 @@ async def handle_message(event, client):
 
     media = [msg.media for msg in messages if msg.media]
     main = messages[0]
-    html = entities_to_html(main.message or "", main.entities or [])
-    html += f"\n\n{escape(source)}"
+    html = entities_to_html_nested(main.message or "", main.entities or []) + f"\n\n{escape(source)}"
 
     max_len = 1000 if media else 4000
     chunks = [html[i:i+max_len] for i in range(0, len(html), max_len)]
