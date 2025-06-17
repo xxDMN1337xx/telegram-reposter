@@ -25,31 +25,43 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Расширение entity до начала слова
-def adjust_entities_to_word_start(text, entities):
-    updated = []
-    for ent in entities or []:
-        if not hasattr(ent, 'offset') or not hasattr(ent, 'length'):
-            updated.append(ent)
-            continue
+# === Проверка пересечения
+def overlaps(e1_start, e1_end, others):
+    for e in others:
+        e2_start = e.offset
+        e2_end = e.offset + e.length
+        if max(e1_start, e2_start) < min(e1_end, e2_end):
+            return True
+    return False
 
+# === Умное расширение
+def smart_expand_entities(text, entities):
+    result = []
+    for i, ent in enumerate(entities or []):
         start = ent.offset
         end = start + ent.length
-        while start > 0 and text[start - 1] not in string.whitespace + string.punctuation:
-            start -= 1
 
-        delta = ent.offset - start
-        if delta > 0:
+        # не расширяем, если это URL
+        if isinstance(ent, (MessageEntityTextUrl, MessageEntityMentionName, MessageEntityUrl)):
+            result.append(ent)
+            continue
+
+        new_start = start
+        while new_start > 0 and text[new_start - 1] not in string.whitespace + string.punctuation:
+            new_start -= 1
+
+        if new_start < start and not overlaps(new_start, end, entities[:i] + entities[i+1:]):
+            delta = start - new_start
             new_ent = ent.__class__.__new__(ent.__class__)
             new_ent.__dict__.update(ent.__dict__)
-            new_ent.offset = start
+            new_ent.offset = new_start
             new_ent.length += delta
-            updated.append(new_ent)
+            result.append(new_ent)
         else:
-            updated.append(ent)
-    return updated
+            result.append(ent)
+    return result
 
-# === Приоритет вложенности
+# === Сортировка для вложенности
 def sort_entities_for_opening(entities):
     priority = {
         MessageEntityBold: 1,
@@ -66,12 +78,12 @@ def sort_entities_for_opening(entities):
     }
     return sorted(entities, key=lambda e: priority.get(type(e), 3))
 
-# === HTML-рендер с вложенностью и приоритетом
+# === Рендер HTML
 def entities_to_html_nested(text, entities):
     if not text:
         return ""
 
-    entities = adjust_entities_to_word_start(text, entities)
+    entities = smart_expand_entities(text, entities)
 
     tag_map = {
         MessageEntityBold: "b",
@@ -87,14 +99,10 @@ def entities_to_html_nested(text, entities):
         MessageEntityMentionName: "a",
     }
 
-    opens = {}
-    closes = {}
-
+    opens, closes = {}, {}
     for ent in entities:
-        start = ent.offset
-        end = start + ent.length
-        opens.setdefault(start, []).append(ent)
-        closes.setdefault(end, []).append(ent)
+        opens.setdefault(ent.offset, []).append(ent)
+        closes.setdefault(ent.offset + ent.length, []).append(ent)
 
     result = []
     i = 0
@@ -125,8 +133,8 @@ def entities_to_html_nested(text, entities):
         result.append(escape(text[i]))
         i += 1
 
-    if len(text) in closes:
-        for ent in reversed(sort_entities_for_opening(closes[len(text)])):
+    if i in closes:
+        for ent in reversed(sort_entities_for_opening(closes[i])):
             if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                 result.append("</a>")
             else:
