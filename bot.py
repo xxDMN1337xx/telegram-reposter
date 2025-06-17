@@ -64,17 +64,17 @@ def smart_expand_entities(text, entities):
 # === Сортировка для вложенности
 def sort_entities_for_opening(entities):
     priority = {
-        MessageEntityBold: 1,
-        MessageEntityItalic: 1,
-        MessageEntityUnderline: 1,
-        MessageEntityStrike: 1,
-        MessageEntityCode: 1,
-        MessageEntityPre: 1,
-        MessageEntitySpoiler: 1,
-        MessageEntityBlockquote: 1,
-        MessageEntityTextUrl: 2,
-        MessageEntityUrl: 2,
-        MessageEntityMentionName: 2,
+        MessageEntityTextUrl: 1,
+        MessageEntityUrl: 1,
+        MessageEntityMentionName: 1,
+        MessageEntityBold: 2,
+        MessageEntityItalic: 2,
+        MessageEntityUnderline: 2,
+        MessageEntityStrike: 2,
+        MessageEntityCode: 2,
+        MessageEntityPre: 2,
+        MessageEntitySpoiler: 2,
+        MessageEntityBlockquote: 2,
     }
     return sorted(entities, key=lambda e: priority.get(type(e), 3))
 
