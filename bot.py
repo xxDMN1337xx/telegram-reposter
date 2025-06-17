@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import string
 import pymorphy2
 import g4f
 from html import escape
@@ -24,10 +25,38 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === HTML с вложенными тегами и учётом первой буквы
+# === Коррекция начала entity к началу слова
+def adjust_entities_to_word_start(text, entities):
+    updated = []
+    for ent in entities or []:
+        if not hasattr(ent, 'offset') or not hasattr(ent, 'length'):
+            updated.append(ent)
+            continue
+
+        start = ent.offset
+        end = start + ent.length
+
+        while start > 0 and text[start - 1] not in string.whitespace + string.punctuation:
+            start -= 1
+
+        delta = ent.offset - start
+        if delta > 0:
+            new_ent = ent.__class__.__new__(ent.__class__)
+            new_ent.__dict__.update(ent.__dict__)
+            new_ent.offset = start
+            new_ent.length += delta
+            updated.append(new_ent)
+        else:
+            updated.append(ent)
+
+    return updated
+
+# === HTML форматирование с вложенностью
 def entities_to_html_nested(text, entities):
     if not text:
         return ""
+
+    entities = adjust_entities_to_word_start(text, entities)
 
     tag_map = {
         MessageEntityBold: "b",
@@ -46,14 +75,13 @@ def entities_to_html_nested(text, entities):
     opens = {}
     closes = {}
 
-    for ent in entities or []:
+    for ent in entities:
         start = ent.offset
-        end = ent.offset + ent.length
+        end = start + ent.length
         opens.setdefault(start, []).append(ent)
         closes.setdefault(end, []).append(ent)
 
     result = []
-    open_stack = []
     i = 0
     length = len(text)
 
@@ -95,7 +123,7 @@ def entities_to_html_nested(text, entities):
 
     return ''.join(result)
 
-# === Текстовая фильтрация
+# === Фильтрация
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
@@ -124,8 +152,8 @@ async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "Запрещено публиковать:\n- личные посты\n- бесполезные тексты\n- философия, конкурсы\n\n"
-        "Разрешено:\n- кейсы, цифры, связки, схемы, API, скрипты, ИИ-инструменты\n\n"
+        "Запрещено:\n- личные посты\n- бесполезные тексты\n- философия, конкурсы\n"
+        "Разрешено:\n- кейсы, цифры, связки, инструменты, API, инсайты\n\n"
         f"Анализируй:\n\"{clean_text}\"\n\n"
         "Ответь одним словом: реклама, бесполезно, полезно."
     )
