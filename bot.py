@@ -112,33 +112,45 @@ async def check_with_gpt(text: str, client) -> str:
     results = []
     total = len(fallback_providers)
 
-    async def call_provider(provider, index):
-    try:
-        # Сначала пробуем без model
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    g4f.ChatCompletion.create,
-                    provider=provider,
-                    messages=[{"role": "user", "content": prompt}]
-                ),
-                timeout=30
-            )
-        except Exception as e:
-            # Если не сработало — пробуем с model="gpt-3.5"
+            async def call_provider(provider, index):
             try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        g4f.ChatCompletion.create,
-                        provider=provider,
-                        model="gpt-3.5",
-                        messages=[{"role": "user", "content": prompt}]
-                    ),
-                    timeout=30
-                )
-            except Exception as e2:
-                # Если не сработало вообще — пропускаем провайдера
-                return None
+                # Сначала пробуем без model
+                try:
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            g4f.ChatCompletion.create,
+                            provider=provider,
+                            messages=[{"role": "user", "content": prompt}]
+                        ),
+                        timeout=30
+                    )
+                except Exception as e:
+                    # Если не сработало — пробуем с model="gpt-3.5"
+                    try:
+                        response = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                g4f.ChatCompletion.create,
+                                provider=provider,
+                                model="gpt-3.5",
+                                messages=[{"role": "user", "content": prompt}]
+                            ),
+                            timeout=30
+                        )
+                    except Exception as e2:
+                        # Если не сработало вообще — пропускаем провайдера
+                        return None
+
+                result = (response or "").strip().lower()
+                result = re.sub(r'[^а-яА-Я]', '', result)
+                if result in ['реклама', 'бесполезно', 'полезно']:
+                    await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ✅ {provider.__name__}: {result}"), parse_mode='markdown_v2')
+                    return result
+                else:
+                    await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'"), parse_mode='markdown_v2')
+            except Exception as e:
+                await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}"), parse_mode='markdown_v2')
+            return None
+
 
         result = (response or "").strip().lower()
         result = re.sub(r'[^а-яА-Я]', '', result)
