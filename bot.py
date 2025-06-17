@@ -3,11 +3,6 @@ import os
 import re
 import pymorphy2
 import g4f
-from g4f.provider import (
-    AnyProvider, Blackbox, Chatai, CohereForAI_C4AI_Command, Copilot,
-    CopilotAccount, Free2GPT, Qwen_Qwen_2_5, Qwen_Qwen_2_5_Max,
-    Qwen_Qwen_2_72B, TeachAnything, WeWordle, Yqcloud
-)
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageEntity
 from config import API_ID, API_HASH, SESSION_NAME
