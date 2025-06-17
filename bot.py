@@ -1,7 +1,7 @@
 import asyncio
 import os
-import copy
 import re
+import copy
 import pymorphy2
 import g4f
 from html import escape
@@ -25,7 +25,7 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Фикс entity.offset к началу слова
+# === Сдвиг offset к началу слова
 def normalize_entity_offsets(entities, text):
     updated = []
     for ent in entities or []:
@@ -35,21 +35,17 @@ def normalize_entity_offsets(entities, text):
 
         offset = ent.offset
         end = offset + ent.length
-
-        # Смещаем offset влево до начала слова
         while offset > 0 and text[offset - 1].isalnum():
             offset -= 1
-
         new_length = end - offset
         new_ent = copy.deepcopy(ent)
         new_ent.offset = offset
         new_ent.length = new_length
         updated.append(new_ent)
-
     return updated
 
-# === HTML с вложенными тегами и учётом первой буквы и согласования
-def entities_to_html_nested(text, entities):
+# === HTML с вложенными тегами и правильным порядком
+def entities_to_html_nested_fixed(text, entities):
     if not text:
         return ""
 
@@ -67,30 +63,39 @@ def entities_to_html_nested(text, entities):
         MessageEntityMentionName: "a",
     }
 
+    # Упорядочивание: длиннее entity — выше при открытии, ниже при закрытии
     opens = {}
     closes = {}
 
-    for ent in entities or []:
+    for ent in entities:
         start = ent.offset
         end = ent.offset + ent.length
         opens.setdefault(start, []).append(ent)
         closes.setdefault(end, []).append(ent)
 
+    # Сортируем: открытие — длиннее раньше; закрытие — короче раньше
+    for k in opens:
+        opens[k].sort(key=lambda e: -e.length)
+    for k in closes:
+        closes[k].sort(key=lambda e: e.length)
+
     result = []
-    length = len(text)
-    i = 0
-    while i < length:
+    for i, char in enumerate(text):
         if i in closes:
-            for ent in reversed(closes[i]):
-                if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
+            for ent in closes[i]:
+                tag = tag_map.get(type(ent))
+                if isinstance(ent, MessageEntityTextUrl):
                     result.append("</a>")
-                else:
-                    tag = tag_map.get(type(ent))
-                    if tag:
-                        result.append(f"</{tag}>")
+                elif isinstance(ent, MessageEntityMentionName):
+                    result.append("</a>")
+                elif isinstance(ent, MessageEntityUrl):
+                    result.append("</a>")
+                elif tag:
+                    result.append(f"</{tag}>")
 
         if i in opens:
             for ent in opens[i]:
+                tag = tag_map.get(type(ent))
                 if isinstance(ent, MessageEntityTextUrl):
                     result.append(f'<a href="{escape(ent.url)}">')
                 elif isinstance(ent, MessageEntityMentionName):
@@ -98,22 +103,18 @@ def entities_to_html_nested(text, entities):
                 elif isinstance(ent, MessageEntityUrl):
                     url = escape(text[ent.offset:ent.offset + ent.length])
                     result.append(f'<a href="{url}">')
-                else:
-                    tag = tag_map.get(type(ent))
-                    if tag:
-                        result.append(f"<{tag}>")
+                elif tag:
+                    result.append(f"<{tag}>")
 
-        result.append(escape(text[i]))
-        i += 1
+        result.append(escape(char))
 
-    if length in closes:
-        for ent in reversed(closes[length]):
+    if len(text) in closes:
+        for ent in closes[len(text)]:
+            tag = tag_map.get(type(ent))
             if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                 result.append("</a>")
-            else:
-                tag = tag_map.get(type(ent))
-                if tag:
-                    result.append(f"</{tag}>")
+            elif tag:
+                result.append(f"</{tag}>")
 
     return ''.join(result)
 
@@ -228,7 +229,7 @@ async def handle_message(event, client):
     media = [msg.media for msg in messages if msg.media]
     main = messages[0]
     fixed_entities = normalize_entity_offsets(main.entities or [], main.message or "")
-    html = entities_to_html_nested(main.message or "", fixed_entities) + f"\n\n{escape(source)}"
+    html = entities_to_html_nested_fixed(main.message or "", fixed_entities) + f"\n\n{escape(source)}"
 
     max_len = 1000 if media else 4000
     chunks = [html[i:i+max_len] for i in range(0, len(html), max_len)]
