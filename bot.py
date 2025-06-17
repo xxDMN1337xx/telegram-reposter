@@ -87,35 +87,49 @@ def format_message_to_html(message):
     result += escape_html(text[last_offset:])
     return result
 
-# === Умное разбиение HTML текста
-def smart_split_html(html, max_len):
-    blocks = re.split(r'(</?(?:b|i|u|s|code|pre|a|span|blockquote)[^>]*>)', html)
+# === Умное разбиение HTML текста без разрыва форматирования
+def smart_split_html_preserving_blocks(html: str, max_len: int):
+    paragraphs = re.split(r'(\n\n+)', html)
     result = []
-    buffer = ''
+    current_chunk = ""
 
-    for block in blocks:
-        if len(buffer) + len(block) <= max_len:
-            buffer += block
+    def fits(chunk, part):
+        return len(chunk) + len(part) <= max_len
+
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        if fits(current_chunk, para):
+            current_chunk += para
         else:
-            if buffer:
-                result.append(buffer.strip())
-            buffer = block
+            if current_chunk:
+                result.append(current_chunk.strip())
+            if len(para) > max_len:
+                # разбиваем по предложениям
+                sentences = re.split(r'(?<=[.!?])\s', para)
+                chunk = ""
+                for sent in sentences:
+                    if fits(chunk, sent):
+                        chunk += sent + " "
+                    else:
+                        if chunk:
+                            result.append(chunk.strip())
+                        chunk = sent + " "
+                if chunk:
+                    result.append(chunk.strip())
+                current_chunk = ""
+            else:
+                current_chunk = para
 
-    if buffer:
-        result.append(buffer.strip())
+    if current_chunk:
+        result.append(current_chunk.strip())
+
     return result
 
 # === GPT фильтрация
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
-
-    prompt = (
-        "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "[...]\n\n"  # Сократил для читаемости (оставь оригинальный промпт у себя)
-        f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
-        "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
-    )
-
+    prompt = ("..." + f"\nАнализируй текст поста:\n\"{clean_text}\"\n\nОтветь **одним словом**, выбери только из: реклама, бесполезно, полезно.")
     tasks = []
     for i, provider in enumerate(fallback_providers):
         async def call(provider=provider, i=i):
@@ -133,17 +147,13 @@ async def check_with_gpt(text: str, client) -> str:
                 await client.send_message(CHANNEL_TRASH, f"{i+1}/{len(fallback_providers)} ❌ {provider.__name__}: {str(e)[:100]}")
             return None
         tasks.append(call())
-
     raw_results = await asyncio.gather(*tasks)
     summary = {"полезно": 0, "реклама": 0, "бесполезно": 0}
     for r in raw_results:
         if r in summary:
             summary[r] += 1
-
     await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}")
-    if summary['полезно'] > summary['реклама'] + summary['бесполезно']:
-        return 'полезно'
-    return 'мусор'
+    return 'полезно' if summary['полезно'] > summary['реклама'] + summary['бесполезно'] else 'мусор'
 
 # === Обработка сообщений
 async def handle_message(event, client):
@@ -167,7 +177,6 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    source = ""
     try:
         entity = await client.get_entity(event.chat_id)
         source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
@@ -186,7 +195,7 @@ async def handle_message(event, client):
 
     html_buffer = html_buffer.strip()
     max_text_len = 1000 if media else 4000
-    chunks = smart_split_html(html_buffer, max_text_len)
+    chunks = smart_split_html_preserving_blocks(html_buffer, max_text_len)
     if chunks:
         chunks[-1] += f"\n\n{escape_html(source)}"
 
