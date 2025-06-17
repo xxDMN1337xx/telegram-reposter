@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import string
 import pymorphy2
 import g4f
 from html import escape
@@ -25,65 +24,36 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Проверка пересечения
-def overlaps(e1_start, e1_end, others):
-    for e in others:
-        e2_start = e.offset
-        e2_end = e.offset + e.length
-        if max(e1_start, e2_start) < min(e1_end, e2_end):
-            return True
-    return False
-
-# === Умное расширение
-def smart_expand_entities(text, entities):
-    result = []
-    for i, ent in enumerate(entities or []):
-        start = ent.offset
-        end = start + ent.length
-
-        # не расширяем, если это URL
-        if isinstance(ent, (MessageEntityTextUrl, MessageEntityMentionName, MessageEntityUrl)):
-            result.append(ent)
+# === Фикс entity.offset к началу слова
+def normalize_entity_offsets(entities, text):
+    updated = []
+    for ent in entities or []:
+        if not hasattr(ent, "offset") or not hasattr(ent, "length"):
+            updated.append(ent)
             continue
 
-        new_start = start
-        while new_start > 0 and text[new_start - 1] not in string.whitespace + string.punctuation:
-            new_start -= 1
+        offset = ent.offset
+        end = offset + ent.length
 
-        if new_start < start and not overlaps(new_start, end, entities[:i] + entities[i+1:]):
-            delta = start - new_start
-            new_ent = ent.__class__.__new__(ent.__class__)
-            new_ent.__dict__.update(ent.__dict__)
-            new_ent.offset = new_start
-            new_ent.length += delta
-            result.append(new_ent)
-        else:
-            result.append(ent)
-    return result
+        # Смещаем offset влево до начала слова
+        while offset > 0 and text[offset - 1].isalnum():
+            offset -= 1
 
-# === Сортировка для вложенности
-def sort_entities_for_opening(entities):
-    priority = {
-        MessageEntityTextUrl: 1,
-        MessageEntityUrl: 1,
-        MessageEntityMentionName: 1,
-        MessageEntityBold: 2,
-        MessageEntityItalic: 2,
-        MessageEntityUnderline: 2,
-        MessageEntityStrike: 2,
-        MessageEntityCode: 2,
-        MessageEntityPre: 2,
-        MessageEntitySpoiler: 2,
-        MessageEntityBlockquote: 2,
-    }
-    return sorted(entities, key=lambda e: priority.get(type(e), 3))
+        new_length = end - offset
+        # Создаём копию entity с обновлённым offset/length
+        new_ent = ent.__class__.from_reader(None)
+        for attr in ent.__dict__:
+            setattr(new_ent, attr, getattr(ent, attr))
+        new_ent.offset = offset
+        new_ent.length = new_length
+        updated.append(new_ent)
 
-# === Рендер HTML
+    return updated
+
+# === HTML с вложенными тегами и учётом первой буквы и согласования
 def entities_to_html_nested(text, entities):
     if not text:
         return ""
-
-    entities = smart_expand_entities(text, entities)
 
     tag_map = {
         MessageEntityBold: "b",
@@ -99,16 +69,21 @@ def entities_to_html_nested(text, entities):
         MessageEntityMentionName: "a",
     }
 
-    opens, closes = {}, {}
-    for ent in entities:
-        opens.setdefault(ent.offset, []).append(ent)
-        closes.setdefault(ent.offset + ent.length, []).append(ent)
+    opens = {}
+    closes = {}
+
+    for ent in entities or []:
+        start = ent.offset
+        end = ent.offset + ent.length
+        opens.setdefault(start, []).append(ent)
+        closes.setdefault(end, []).append(ent)
 
     result = []
+    length = len(text)
     i = 0
-    while i < len(text):
+    while i < length:
         if i in closes:
-            for ent in reversed(sort_entities_for_opening(closes[i])):
+            for ent in reversed(closes[i]):
                 if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                     result.append("</a>")
                 else:
@@ -117,7 +92,7 @@ def entities_to_html_nested(text, entities):
                         result.append(f"</{tag}>")
 
         if i in opens:
-            for ent in sort_entities_for_opening(opens[i]):
+            for ent in opens[i]:
                 if isinstance(ent, MessageEntityTextUrl):
                     result.append(f'<a href="{escape(ent.url)}">')
                 elif isinstance(ent, MessageEntityMentionName):
@@ -133,8 +108,8 @@ def entities_to_html_nested(text, entities):
         result.append(escape(text[i]))
         i += 1
 
-    if i in closes:
-        for ent in reversed(sort_entities_for_opening(closes[i])):
+    if length in closes:
+        for ent in reversed(closes[length]):
             if isinstance(ent, (MessageEntityTextUrl, MessageEntityUrl, MessageEntityMentionName)):
                 result.append("</a>")
             else:
@@ -173,8 +148,8 @@ async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
-        "Запрещено:\n- личные посты\n- бесполезные тексты\n- философия, конкурсы\n"
-        "Разрешено:\n- кейсы, цифры, связки, инструменты, API, инсайты\n\n"
+        "Запрещено публиковать:\n- личные посты\n- бесполезные тексты\n- общие рассуждения\n"
+        "Разрешено:\n- кейсы, цифры, связки, схемы, API, скрипты, инсайты\n\n"
         f"Анализируй:\n\"{clean_text}\"\n\n"
         "Ответь одним словом: реклама, бесполезно, полезно."
     )
@@ -223,7 +198,6 @@ async def handle_message(event, client):
         return
     if event.poll or event.voice or event.video_note:
         return
-
     if not (event.message.message or "").strip():
         return
 
@@ -255,7 +229,8 @@ async def handle_message(event, client):
 
     media = [msg.media for msg in messages if msg.media]
     main = messages[0]
-    html = entities_to_html_nested(main.message or "", main.entities or []) + f"\n\n{escape(source)}"
+    fixed_entities = normalize_entity_offsets(main.entities or [], main.message or "")
+    html = entities_to_html_nested(main.message or "", fixed_entities) + f"\n\n{escape(source)}"
 
     max_len = 1000 if media else 4000
     chunks = [html[i:i+max_len] for i in range(0, len(html), max_len)]
