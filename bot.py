@@ -6,6 +6,7 @@ import g4f
 from html import escape
 from telethon import TelegramClient, events
 from telethon.tl.types import *
+from telethon.utils import _formatted_text  # ✅ используем Telethon встроенный HTML-рендер
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -48,48 +49,9 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
-# === HTML-конвертация
+# === HTML-конвертация через Telethon
 def entities_to_html(text, entities):
-    if not entities:
-        return escape(text or "")
-
-    entities = sorted(entities, key=lambda e: e.offset)
-    result = []
-    last = 0
-
-    for e in entities:
-        result.append(escape(text[last:e.offset]))
-        content = escape(text[e.offset:e.offset + e.length])
-
-        if isinstance(e, MessageEntityBold):
-            result.append(f"<b>{content}</b>")
-        elif isinstance(e, MessageEntityItalic):
-            result.append(f"<i>{content}</i>")
-        elif isinstance(e, MessageEntityUnderline):
-            result.append(f"<u>{content}</u>")
-        elif isinstance(e, MessageEntityStrike):
-            result.append(f"<s>{content}</s>")
-        elif isinstance(e, MessageEntityCode):
-            result.append(f"<code>{content}</code>")
-        elif isinstance(e, MessageEntityPre):
-            result.append(f"<pre>{content}</pre>")
-        elif isinstance(e, MessageEntityTextUrl):
-            result.append(f'<a href="{escape(e.url)}">{content}</a>')
-        elif isinstance(e, MessageEntityUrl):
-            result.append(f'<a href="{content}">{content}</a>')
-        elif isinstance(e, MessageEntityMentionName):
-            result.append(f'<a href="tg://user?id={e.user_id}">{content}</a>')
-        elif isinstance(e, MessageEntitySpoiler):
-            result.append(f'<tg-spoiler>{content}</tg-spoiler>')
-        elif isinstance(e, MessageEntityBlockquote):
-            result.append(f'<blockquote>{content}</blockquote>')
-        else:
-            result.append(content)
-
-        last = e.offset + e.length
-
-    result.append(escape(text[last:]))
-    return ''.join(result)
+    return _formatted_text(text or "", entities or [], 'html')
 
 # === GPT-фильтрация
 async def check_with_gpt(text: str, client) -> str:
@@ -151,7 +113,6 @@ async def handle_message(event, client):
 
     if not isinstance(event.message.to_id, PeerChannel):
         return
-
     if event.poll or event.voice or event.video_note:
         return
 
@@ -169,7 +130,6 @@ async def handle_message(event, client):
     result = await check_with_gpt(message_text, client)
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
-    # Группировка
     messages_to_forward = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
@@ -177,7 +137,7 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    # Источник
+    # === Источник
     source = ""
     try:
         fwd = event.message.fwd_from
@@ -189,11 +149,11 @@ async def handle_message(event, client):
     except:
         source = f"Источник: канал {event.chat_id}"
 
-    # === Основной текст + media
+    # === Текст и медиа
     media = [msg.media for msg in messages_to_forward if msg.media]
     main_msg = messages_to_forward[0]
-    main_text = entities_to_html(main_msg.message or "", main_msg.entities or [])
-    full_text = main_text.strip() + f"\n\n{escape(source)}"
+    html_text = entities_to_html(main_msg.message or "", main_msg.entities or [])
+    full_text = html_text.strip() + f"\n\n{escape(source)}"
     max_len = 1000 if media else 4000
     chunks = [full_text[i:i+max_len] for i in range(0, len(full_text), max_len)]
 
