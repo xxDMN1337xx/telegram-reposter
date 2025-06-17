@@ -49,6 +49,7 @@ def fix_markdown_links(text):
     return re.sub(r'\*\*(.+?)\*\s*\((https?://[^\s)]+)\)', r'[\1](\2)', text)
 
 async def check_with_gpt(text, client):
+    clean_text = sanitize_input(text)  # <== ДОБАВЬ ЭТУ СТРОКУ
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
         "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
