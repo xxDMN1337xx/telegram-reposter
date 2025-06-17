@@ -1,5 +1,6 @@
 import asyncio
 import os
+import copy
 import re
 import pymorphy2
 import g4f
@@ -40,10 +41,7 @@ def normalize_entity_offsets(entities, text):
             offset -= 1
 
         new_length = end - offset
-        # Создаём копию entity с обновлённым offset/length
-        new_ent = ent.__class__.from_reader(None)
-        for attr in ent.__dict__:
-            setattr(new_ent, attr, getattr(ent, attr))
+        new_ent = copy.deepcopy(ent)
         new_ent.offset = offset
         new_ent.length = new_length
         updated.append(new_ent)
