@@ -135,6 +135,10 @@ async def check_with_gpt(text: str, client) -> str:
 async def handle_message(event, client):
     load_filter_words()
 
+    # === Только каналы (не обрабатываем чаты и группы)
+    if not event.is_channel or event.chat is None or not getattr(event.chat, 'broadcast', False):
+        return
+
     if event.poll or event.voice or event.video_note:
         return
 
@@ -158,20 +162,22 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    # === Определение, нужно ли копировать (по channel_id или fwd_from.channel_id)
+    # === Определение источника
     original_channel_id = None
-    if getattr(event.chat, "id", None) in COPY_CHANNELS:
-        original_channel_id = event.chat.id
-    elif event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
-        channel_id = event.message.fwd_from.from_id.channel_id
-        if channel_id in COPY_CHANNELS:
-            original_channel_id = channel_id
+    source_url = None
 
-    is_copy = original_channel_id is not None
+    if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
+        original_channel_id = event.message.fwd_from.from_id.channel_id
+    elif getattr(event.chat, "id", None) in COPY_CHANNELS:
+        original_channel_id = event.chat.id
+
+    if original_channel_id in COPY_CHANNELS:
+        source_url = COPY_CHANNELS[original_channel_id]
+
+    is_copy = source_url is not None
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
     if is_copy:
-        source_url = COPY_CHANNELS[original_channel_id]
         media_files = []
         full_text = ""
 
