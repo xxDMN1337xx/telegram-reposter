@@ -3,8 +3,9 @@ import os
 import re
 import pymorphy2
 import g4f
+from html import escape
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, PeerChannel, PeerUser
+from telethon.tl.types import *
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -13,7 +14,6 @@ CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
 # === Провайдеры
 fallback_providers = [
-    # === g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.Free2GPT,
@@ -49,6 +49,51 @@ def normalize_text(text):
     words = text.lower().split()
     return {morph.parse(word)[0].normal_form for word in words}
 
+# === HTML форматирование из entities
+
+def entities_to_html(text, entities):
+    if not entities:
+        return escape(text)
+
+    offsets = []
+    for ent in entities:
+        start, end = ent.offset, ent.offset + ent.length
+        tag_open, tag_close = '', ''
+
+        if isinstance(ent, MessageEntityBold):
+            tag_open, tag_close = '<b>', '</b>'
+        elif isinstance(ent, MessageEntityItalic):
+            tag_open, tag_close = '<i>', '</i>'
+        elif isinstance(ent, MessageEntityUnderline):
+            tag_open, tag_close = '<u>', '</u>'
+        elif isinstance(ent, MessageEntityStrike):
+            tag_open, tag_close = '<s>', '</s>'
+        elif isinstance(ent, MessageEntityCode):
+            tag_open, tag_close = '<code>', '</code>'
+        elif isinstance(ent, MessageEntityPre):
+            tag_open, tag_close = '<pre>', '</pre>'
+        elif isinstance(ent, MessageEntityTextUrl):
+            tag_open, tag_close = f'<a href="{escape(ent.url)}">', '</a>'
+        elif isinstance(ent, MessageEntityUrl):
+            url = escape(text[start:end])
+            tag_open, tag_close = f'<a href="{url}">', '</a>'
+        elif isinstance(ent, MessageEntityMentionName):
+            tag_open, tag_close = f'<a href="tg://user?id={ent.user_id}">', '</a>'
+        elif isinstance(ent, MessageEntitySpoiler):
+            tag_open, tag_close = '<tg-spoiler>', '</tg-spoiler>'
+        elif isinstance(ent, MessageEntityBlockquote):
+            tag_open, tag_close = '<blockquote>', '</blockquote>'
+
+        offsets.append((start, tag_open))
+        offsets.append((end, tag_close))
+
+    offsets.sort(key=lambda x: x[0], reverse=True)
+    text = escape(text)
+    for pos, tag in offsets:
+        text = text[:pos] + tag + text[pos:]
+
+    return text
+
 # === GPT фильтрация
 async def check_with_gpt(text: str, client) -> str:
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
@@ -56,22 +101,7 @@ async def check_with_gpt(text: str, client) -> str:
     prompt = (
         "Ты ассистент, помогающий отбирать посты для Telegram-канала по арбитражу трафика.\n\n"
         "Тебе НЕЛЬЗЯ допускать к публикации следующие типы постов:\n"
-        "- личные посты (о жизни, мотивации, погоде, мнения, размышления, философия)\n"
-        "- общая реклама и нецелевые офферы\n"
-        "- любые бесполезные и ни о чём тексты, без конкретных действий, результатов или данных\n"
-        "- интервью, подкасты, беседы, видеоинтервью\n"
-        "- розыгрыши, конкурсы, призы, подарки\n"
-        "- посты про вечеринки, конференции, собрания, митапы, тусовки и сходки\n"
-        "- лонгриды или колонки без конкретики: без связок, инструментов, цифр или кейсов\n"
-        "- жалобы, наблюдения, история развития рынка, «эволюция контента» и т.д.\n\n"
-        "Публиковать можно ТОЛЬКО если пост содержит:\n"
-        "- конкретную пользу для арбитражников: кейсы, схемы, инсайты, цифры, советы, таблицы\n"
-        "- конкретные связки, источники трафика, подходы, платформы, сравнение офферов\n"
-        "- полезные инструменты, спай, автоматизацию, API, скрипты, парсеры, настройки\n"
-        "- обзоры или новости об ИИ-инструментах (SkyReels, Scira, Sora, ChatGPT, MidJourney, Runway и т.д.)\n"
-        "- новости по платформам, трекерам, банам, обновлениям, платёжкам и т.д.\n\n"
-        "Если в тексте нет конкретной пользы — считай его бесполезным.\n"
-        "Не будь мягким. Отсеивай всё, что не даст выгоды арбитражнику.\n\n"
+        "- личные посты...\n\n"
         f"Анализируй текст поста:\n\"{clean_text}\"\n\n"
         "Ответь **одним словом**, выбери только из: реклама, бесполезно, полезно."
     )
@@ -118,8 +148,7 @@ async def check_with_gpt(text: str, client) -> str:
     await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}")
     return "полезно" if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]) else "мусор"
 
-
-# === Обработка сообщений (ИСПРАВЛЕННАЯ ВЕРСИЯ) ===
+# === Обработка сообщений
 async def handle_message(event, client):
     load_filter_words()
 
@@ -129,110 +158,72 @@ async def handle_message(event, client):
     if event.poll or event.voice or event.video_note:
         return
 
-    message_text_for_gpt = event.message.text or ""
-    
-    if not message_text_for_gpt.strip() and not event.message.media:
+    message_text = event.message.text or ""
+    if not message_text.strip():
         return
 
-    if len(message_text_for_gpt) > 2000:
-        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text_for_gpt)})")
+    if len(message_text) > 2000:
+        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})")
 
-    normalized = normalize_text(message_text_for_gpt)
+    normalized = normalize_text(message_text)
     if filter_words.intersection(normalized):
         return
 
-    if message_text_for_gpt.strip():
-        result = await check_with_gpt(message_text_for_gpt, client)
-    else:
-        result = "мусор"
+    result = await check_with_gpt(message_text, client)
 
-    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
-
-    # Собираем все сообщения из группы (если это альбом)
-    messages_to_copy = [event.message]
+    messages_to_forward = [event.message]
     if event.message.grouped_id:
         async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
             if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
-                messages_to_copy.append(msg)
-    messages_to_copy.sort(key=lambda m: m.id)
+                messages_to_forward.append(msg)
+    messages_to_forward.sort(key=lambda m: m.id)
 
-    # Отправляем копии сообщений с полным сохранением форматирования
     try:
-        # Telethon сам отправит их как альбом, если это возможно, скопировав все
-        sent_messages = await client.send_message(
-            target_channel,
-            file=messages_to_copy  # Передаем список сообщений
-        )
+        entity = await client.get_entity(event.chat_id)
+        source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
+    except:
+        source = f"Источник: канал {event.chat_id}"
 
-        # Формируем текст с источником
-        source_text = ""
-        source_peer = None
-        
-        # Определяем источник: пересланное сообщение или канал, где оно было
-        if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
-            source_peer = PeerChannel(event.message.fwd_from.from_id.channel_id)
-        else:
-            source_peer = event.message.peer_id
-            
+    target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
+
+    text_buffer = ""
+    media = []
+
+    for msg in messages_to_forward:
+        if msg.text:
+            text_buffer += entities_to_html(msg.text, msg.entities) + "\n"
+        if msg.media:
+            media.append(msg.media)
+
+    text_buffer = text_buffer.strip()
+    max_text_len = 1000 if media else 3000
+
+    chunks = [text_buffer[i:i+max_text_len] for i in range(0, len(text_buffer), max_text_len)]
+    if chunks:
+        chunks[-1] += f"\n\n{escape(source)}"
+
+    if media:
         try:
-            entity = await client.get_entity(source_peer)
-            # Создаем красивую Markdown-ссылку
-            source_text = f"Источник: [{entity.title}](https://t.me/{entity.username})" if entity.username else f"Источник: {entity.title}"
+            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False, parse_mode='html')
+            for part in chunks[1:]:
+                await client.send_message(target_channel, part, parse_mode='html')
         except Exception as e:
-            if hasattr(source_peer, 'channel_id'):
-                source_text = f"Источник: ID {source_peer.channel_id}"
-            else:
-                 source_text = "Источник: не определен"
-            print(f"Не удалось получить entity для источника: {e}")
+            print(f"[!] Ошибка отправки медиа: {e}")
+    else:
+        for part in chunks:
+            await client.send_message(target_channel, part, parse_mode='html')
 
-        # Отправляем сообщение с источником в ответ на последнее из скопированных
-        if sent_messages:
-            # Если было отправлено несколько сообщений (альбом), берем последнее
-            last_sent_message = sent_messages[-1] if isinstance(sent_messages, list) else sent_messages
-            
-            await client.send_message(
-                target_channel,
-                message=source_text,
-                reply_to=last_sent_message.id,
-                parse_mode='md' # Включаем обработку Markdown для ссылки
-            )
-        
-        print(f"[OK] Копия с источника: {source_text.replace('Источник: ', '')} -> Канал: {result}")
-
-    except Exception as e:
-        print(f"[!!!] Критическая ошибка при копировании сообщения: {e}")
-
+    print(f"[OK] Копия с источника: {source}")
 
 # === Запуск клиента
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
-    # Кэш для отсеивания дублей из одной группы
-    processed_groups = set()
-
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
-        # Если сообщение является частью группы (альбома)
-        if event.message.grouped_id:
-            # Если мы уже обработали эту группу, выходим
-            if event.message.grouped_id in processed_groups:
-                return
-            # Иначе добавляем ID группы в кэш и обрабатываем
-            processed_groups.add(event.message.grouped_id)
-            # Запускаем таймер для очистки кэша через 10 секунд
-            asyncio.create_task(clear_group_id(event.message.grouped_id))
-        
-        try:
-            await handle_message(event, client)
-        except Exception as e:
-            print(f"[!!!] Критическая ошибка в обработчике: {e}")
+        await handle_message(event, client)
 
-    async def clear_group_id(group_id):
-        await asyncio.sleep(10) # Даем время всем сообщениям из группы прийти
-        processed_groups.discard(group_id)
-
-    print("Бот запущен и слушает новые сообщения...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
