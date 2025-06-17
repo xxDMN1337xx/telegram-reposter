@@ -1,3 +1,17 @@
+import asyncio
+import os
+import re
+import pymorphy2
+import g4f
+from telethon import TelegramClient, events
+from telethon.tl.types import Message
+from config import API_ID, API_HASH, SESSION_NAME
+
+# === Каналы
+CHANNEL_GOOD = 'https://t.me/fbeed1337'
+CHANNEL_TRASH = 'https://t.me/musoradsxx'
+
+# === Провайдеры
 fallback_providers = [
     g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
@@ -14,11 +28,17 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-
 MAX_LEN = 4096  # Telegram лимит на одно сообщение
 CAPTION_LEN = 1024  # Максимальный размер caption для медиа
 SPLIT_LEN = 4000  # немного меньше, чтобы избежать ошибок по словам/юникоду
 
+# --- Экранирование MarkdownV2 ---
+def escape_markdown_v2(text):
+    # https://core.telegram.org/bots/api#markdownv2-style
+    symbols = r'_ * [ ] ( ) ~ ` > # + - = | { } . !'.split()
+    for s in symbols:
+        text = text.replace(s, '\\' + s)
+    return text
 
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
@@ -56,9 +76,6 @@ def split_text(text, max_len=SPLIT_LEN):
     return parts
 
 def split_caption_and_text(full_text, caption_len=CAPTION_LEN, split_len=SPLIT_LEN):
-    """
-    Делит текст на caption (<=caption_len) и остальные части (split_len)
-    """
     if len(full_text) <= caption_len:
         return full_text, []
     caption = full_text[:caption_len]
@@ -110,12 +127,12 @@ async def check_with_gpt(text: str, client) -> str:
             result = (response or "").strip().lower()
             result = re.sub(r'[^а-яА-Я]', '', result)
             if result in ['реклама', 'бесполезно', 'полезно']:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}", parse_mode='MarkdownV2')
+                await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ✅ {provider.__name__} ({model}): {result}"), parse_mode='MarkdownV2')
                 return result
             else:
-                await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'", parse_mode='MarkdownV2')
+                await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ⚠️ {provider.__name__} странный ответ: '{result}'"), parse_mode='MarkdownV2')
         except Exception as e:
-            await client.send_message(CHANNEL_TRASH, f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}", parse_mode='MarkdownV2')
+            await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"{index+1}/{total} ❌ {provider.__name__} ошибка: {str(e)[:100]}"), parse_mode='MarkdownV2')
         return None
 
     tasks = [call_provider(p, i) for i, p in enumerate(fallback_providers)]
@@ -129,11 +146,11 @@ async def check_with_gpt(text: str, client) -> str:
     total_valid = sum(summary.values())
 
     if total_valid == 0:
-        await client.send_message(CHANNEL_TRASH, "❌ Ни один GPT-провайдер не дал ответ. Повтор через 30 минут.", parse_mode='MarkdownV2')
+        await client.send_message(CHANNEL_TRASH, escape_markdown_v2("❌ Ни один GPT-провайдер не дал ответ. Повтор через 30 минут."), parse_mode='MarkdownV2')
         await asyncio.sleep(1800)
         return await check_with_gpt(text, client)
 
-    await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}", parse_mode='MarkdownV2')
+    await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"📊 Сводка: {summary}"), parse_mode='MarkdownV2')
 
     if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]):
         return "полезно"
@@ -155,7 +172,7 @@ async def handle_message(event, client):
         return
 
     if len(message_text) > 2000:
-        await client.send_message(CHANNEL_TRASH, f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})", parse_mode='MarkdownV2')
+        await client.send_message(CHANNEL_TRASH, escape_markdown_v2(f"⚠️ Сообщение обрезано до 2000 символов (было {len(message_text)})"), parse_mode='MarkdownV2')
 
     normalized = normalize_text(message_text)
     if filter_words.intersection(normalized):
@@ -172,7 +189,6 @@ async def handle_message(event, client):
 
     # --- Определение источника ---
     if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
-        # Это репост — берем оригинальный канал
         channel_id = event.message.fwd_from.from_id.channel_id
         try:
             orig_chat = await client.get_entity(channel_id)
@@ -183,7 +199,6 @@ async def handle_message(event, client):
         except Exception as e:
             source_url = f"Неизвестный канал (ID: {channel_id})"
     else:
-        # Обычный пост — используем текущий канал
         chat = await event.get_chat()
         if hasattr(chat, "username") and chat.username:
             source_url = f"https://t.me/{chat.username}"
@@ -201,7 +216,6 @@ async def handle_message(event, client):
         if msg.text:
             full_text += msg.text.strip() + "\n"
 
-    # Добавляем источник только к последней части текста
     if full_text.strip():
         text_parts = split_text(full_text.strip(), SPLIT_LEN)
         text_parts[-1] = text_parts[-1] + f"\n\nИсточник: {source_url}"
@@ -214,18 +228,17 @@ async def handle_message(event, client):
             await client.send_file(
                 target_channel,
                 file=media_files,
-                caption=caption,
+                caption=escape_markdown_v2(caption),
                 force_document=False,
                 parse_mode='MarkdownV2'
             )
-            # все остальные части текста после caption, плюс остальные части text_parts если есть
             for part in rest_parts + text_parts[1:]:
-                await client.send_message(target_channel, part, parse_mode='MarkdownV2')
+                await client.send_message(target_channel, escape_markdown_v2(part), parse_mode='MarkdownV2')
         except Exception as e:
             print(f"[!] Ошибка отправки медиа: {e}")
     else:
         for part in text_parts:
-            await client.send_message(target_channel, part, parse_mode='MarkdownV2')
+            await client.send_message(target_channel, escape_markdown_v2(part), parse_mode='MarkdownV2')
 
     print(f"[OK] Копия с источника: {source_url}")
 
