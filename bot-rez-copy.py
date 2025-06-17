@@ -1,12 +1,12 @@
 import asyncio
-import os
+import osMore actions
 import re
 import pymorphy2
 import g4f
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, PeerChannel
-# PeerUser не используется, его можно убрать
-# from telethon.tl.types import PeerUser 
+from telethon.tl.types import Message, PeerChannel, PeerUser
+
+
 from config import API_ID, API_HASH, SESSION_NAME
 
 # === Каналы
@@ -26,7 +26,7 @@ fallback_providers = [
     g4f.Provider.Yqcloud,
 ]
 
-# === Очистка текста для GPT
+# === Очистка текста
 def sanitize_input(text):
     text = re.sub(r'https?://\S+', '[ссылка]', text)
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
@@ -53,7 +53,7 @@ def normalize_text(text):
 
 # === GPT фильтрация
 async def check_with_gpt(text: str, client) -> str:
-    # Для анализа GPT используем чистый текст, без разметки
+
     clean_text = sanitize_input(text.replace('"', "'").replace("\n", " "))
 
     prompt = (
@@ -121,7 +121,7 @@ async def check_with_gpt(text: str, client) -> str:
     await client.send_message(CHANNEL_TRASH, f"📊 Сводка: {summary}")
     return "полезно" if summary["полезно"] > (summary["реклама"] + summary["бесполезно"]) else "мусор"
 
-# === Обработка сообщений (ВЕРСИЯ С ИСПРАВЛЕНИЯМИ)
+# === Обработка сообщений
 async def handle_message(event, client):
     load_filter_words()
 
@@ -131,10 +131,10 @@ async def handle_message(event, client):
     if event.poll or event.voice or event.video_note:
         return
 
-    # Для анализа GPT по-прежнему используем чистый текст .text
+
     message_text = event.message.text or ""
-    # Продолжаем, даже если текста нет, но есть медиа
-    if not message_text.strip() and not event.message.media:
+    if not message_text.strip():
+
         return
 
     if len(message_text) > 2000:
@@ -146,107 +146,109 @@ async def handle_message(event, client):
 
     result = await check_with_gpt(message_text, client)
 
-    messages_to_forward = []
+    messages_to_forward = [event.message]
     if event.message.grouped_id:
-        # Улучшенный сбор сгруппированных сообщений
-        group = await client.get_messages(event.chat_id, ids=event.message.grouped_id)
-        if group:
-            messages_to_forward = sorted([msg for msg in group if msg], key=lambda m: m.id)
-    else:
-        messages_to_forward.append(event.message)
+        async for msg in client.iter_messages(event.chat_id, min_id=event.message.id - 10, max_id=event.message.id + 10):
+            if msg.grouped_id == event.message.grouped_id and msg.id != event.message.id:
+                messages_to_forward.append(msg)
+    messages_to_forward.sort(key=lambda m: m.id)
+
+
 
     source = ""
     if event.message.fwd_from and getattr(event.message.fwd_from.from_id, 'channel_id', None):
         try:
             entity = await client.get_entity(PeerChannel(event.message.fwd_from.from_id.channel_id))
-            source = f"Источник: [{entity.title}](https://t.me/{entity.username})" if entity.username else f"Источник: {entity.title}"
+            source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
         except:
             source = f"Источник: канал {event.message.fwd_from.from_id.channel_id}"
     else:
         try:
             entity = await client.get_entity(event.chat_id)
-            source = f"Источник: [{entity.title}](https://t.me/{entity.username})" if entity.username else f"Источник: {entity.title}"
+            source = f"Источник: https://t.me/{entity.username}" if entity.username else f"Источник: {entity.title} {entity.id}"
         except:
             source = f"Источник: канал {event.chat_id}"
 
     target_channel = CHANNEL_GOOD if result == "полезно" else CHANNEL_TRASH
 
-    # --- КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ ЗДЕСЬ ---
+
 
     text_buffer = ""
-    media_messages = []
+    media = []
 
     for msg in messages_to_forward:
-        # 1. Используем .md_text для получения текста с Markdown разметкой
-        if msg.md_text:
-            text_buffer += msg.md_text.strip() + "\n\n"
+        if msg.text:
+            text_buffer += msg.text.strip() + "\n"
+
         if msg.media:
-            media_messages.append(msg) # Собираем сообщения с медиа целиком
+            media.append(msg.media)
 
-    # Добавляем источник в конец общего текста. Источник оформлен как Markdown-ссылка.
-    full_text_with_source = text_buffer.strip() + f"\n\n{source}"
 
-    # Лимиты Telegram
-    MAX_CAPTION_LEN = 1024
-    MAX_MESSAGE_LEN = 4096
 
-    if media_messages:
-        # Текст для подписи к медиа (не более 1024 символов)
-        caption = full_text_with_source[:MAX_CAPTION_LEN]
-        # Оставшийся текст, который не влез в подпись
-        remaining_text = full_text_with_source[MAX_CAPTION_LEN:]
 
+    text_buffer = text_buffer.strip()
+    max_text_len = 1000 if media else 4000
+
+
+    chunks = [text_buffer[i:i+max_text_len] for i in range(0, len(text_buffer), max_text_len)]
+    if chunks:
+        chunks[-1] += f"\n\n{source}"
+
+
+
+    if media:
         try:
-            # 2. Отправляем медиа с подписью, указывая parse_mode='md'
-            await client.send_file(
-                target_channel,
-                file=media_messages,
-                caption=caption,
-                parse_mode='md'
-            )
-            # Если остался текст, отправляем его отдельными сообщениями
-            if remaining_text:
-                for i in range(0, len(remaining_text), MAX_MESSAGE_LEN):
-                    part = remaining_text[i:i+MAX_MESSAGE_LEN]
-                    await client.send_message(target_channel, part, parse_mode='md')
+            await client.send_file(target_channel, file=media, caption=chunks[0], force_document=False)
+            for part in chunks[1:]:
+                await client.send_message(target_channel, part)
+
+
+
+
+
+
+
+
+
         except Exception as e:
-            print(f"[!] Ошибка отправки медиа с форматированием: {e}")
-            # Запасной вариант: отправить без форматирования
-            await client.send_file(target_channel, file=media_messages, caption=(event.message.text or "")[:MAX_CAPTION_LEN])
+            print(f"[!] Ошибка отправки медиа: {e}")
+    else:
+        for part in chunks:
+            await client.send_message(target_channel, part)
 
-    elif full_text_with_source.strip():
-        # Если медиа нет, просто отправляем текст по частям
-        for i in range(0, len(full_text_with_source), MAX_MESSAGE_LEN):
-            part = full_text_with_source[i:i+MAX_MESSAGE_LEN]
-            # 3. Отправляем текст, указывая parse_mode='md'
-            await client.send_message(target_channel, part, parse_mode='md')
 
-    print(f"[OK] Копия с источника: {source.split('](')[0][10:]} -> {target_channel}")
 
+
+
+
+
+
+
+    print(f"[OK] Копия с источника: {source}")
 
 # === Запуск клиента
 async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-    print("Клиент запускается...")
+
     await client.start()
-    print("Клиент запущен и слушает новые сообщения.")
+
 
     @client.on(events.NewMessage(incoming=True))
     async def handler(event):
-        try:
-            await handle_message(event, client)
-        except Exception as e:
-            # Логируем ошибки, чтобы скрипт не падал молча
-            print(f"[!!!] Критическая ошибка в обработчике: {e}")
-            # Можно отправлять уведомление об ошибке в личные сообщения или специальный канал
-            # await client.send_message('me', f'Ошибка в боте: {e}')
+        await handle_message(event, client)
+
+
+
+
+
+
 
 
     await client.run_until_disconnected()
-    print("Клиент остановлен.")
+
 
 if __name__ == "__main__":
-    # Загружаем стоп-слова один раз при старте
-    load_filter_words()
-    # Запускаем основной цикл
+
+
+
     asyncio.run(main())
