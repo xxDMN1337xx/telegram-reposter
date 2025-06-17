@@ -13,7 +13,7 @@ CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
 # === Провайдеры
 fallback_providers = [
-    g4f.Provider.AnyProvider,
+    # === g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.Free2GPT,
