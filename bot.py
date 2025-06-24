@@ -20,7 +20,6 @@ COPY_CHANNELS = {
 
 # === Провайдеры
 fallback_providers = [
-    # === g4f.Provider.AnyProvider,
     g4f.Provider.Blackbox,
     g4f.Provider.Chatai,
     g4f.Provider.CohereForAI_C4AI_Command,
@@ -90,7 +89,7 @@ async def check_with_gpt(text: str, client) -> str:
     async def call_provider(provider, index):
         try:
             models = getattr(provider, "models", [])
-            model = models[0] if models else "gpt-3.5"
+            model = models[0] if models else "gpt-3.5-turbo"
 
             response = await asyncio.wait_for(
                 asyncio.to_thread(
