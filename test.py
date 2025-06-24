@@ -15,16 +15,16 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
-async def test_provider(provider: g4f.Provider.BaseProvider):
+# Функция test_provider теперь принимает имя модели для использования
+async def test_provider(provider: g4f.Provider.BaseProvider, model_to_use: str):
     provider_name = provider.__name__
     try:
         response = await g4f.ChatCompletion.create_async(
-            model=g4f.models.default,
+            model=model_to_use, # Используем переданную модель
             messages=[{"role": "user", "content": TEST_PROMPT}],
             provider=provider,
             timeout=REQUEST_TIMEOUT
         )
-        # Очищаем ответ от переносов строк для более чистого вывода
         cleaned_response = response.strip().replace('\n', ' ').replace('\r', '') if response else None
         if cleaned_response:
             return provider_name, cleaned_response
@@ -34,48 +34,63 @@ async def test_provider(provider: g4f.Provider.BaseProvider):
 
 async def worker(provider, semaphore, file_handle, counters):
     async with semaphore:
-        provider_name, response = await test_provider(provider)
+        # ====================================================================
+        # ВАША ЛОГИКА ОПРЕДЕЛЕНИЯ МОДЕЛИ (ИНТЕГРИРОВАНА СЮДА)
+        # ====================================================================
+        # Используем getattr для безопасного получения списка моделей
+        model_list = getattr(provider, "models", [])
+        
+        # Выбираем первую модель из списка, если он не пуст, иначе используем запасную
+        if model_list and isinstance(model_list, list) and len(model_list) > 0:
+            model_to_use = model_list[0]
+        else:
+            model_to_use = "gpt-3.5-turbo" # Запасной вариант, если список пуст или некорректен
+        # ====================================================================
+
+        # Передаем выбранную модель в функцию тестирования
+        provider_name, response = await test_provider(provider, model_to_use)
         counters['completed'] += 1
         
-        total = counters['total']
-        completed = counters['completed']
-        successful = counters['successful']
+        total, completed, successful = counters['total'], counters['completed'], counters['successful']
         status_line = f"[Проверено: {completed}/{total} | Успешно: {successful}]"
         
         if response:
             counters['successful'] += 1
             status_line = f"[Проверено: {completed}/{total} | Успешно: {counters['successful']}]"
+            
+            # Обновленный формат записи в файл с добавлением модели
             result_str = (
                 f"Провайдер: {provider_name}\n"
+                f"Модель: {model_to_use}\n"
                 f"Ответ: {response}\n"
                 f"{'-'*20}\n\n"
             )
             file_handle.write(result_str)
             file_handle.flush()
-            print(f"{' ' * 80}\r", end="")
-            print(f"[+] УСПЕХ: {provider_name:<25} | Ответ: {response}")
+            
+            # Очищаем строку и выводим расширенную информацию
+            print(f"{' ' * 120}\r", end="")
+            # Обновленный формат вывода в консоль
+            print(f"[+] УСПЕХ: {provider_name:<25} | Модель: {model_to_use:<25} | Ответ: {response}")
 
         print(status_line, end='\r', flush=True)
 
 async def main():
-    # 1. Получаем абсолютно всех известных провайдеров
     all_known_providers = list(g4f.Provider.__map__.values())
     
-    # 2. ПРАВИЛЬНАЯ ФИЛЬТРАЦИЯ: ИСКЛЮЧАЕМ ПРОВАЙДЕРЫ ДЛЯ ИЗОБРАЖЕНИЙ
-    # Мы оставляем провайдер (p), если у него НЕТ атрибута 'supports_image_generation',
-    # или если этот атрибут равен False.
+    # Сохраняем надежную фильтрацию, которая отсеивает провайдеры для изображений
     chat_providers = [
         p for p in all_known_providers if not getattr(p, 'supports_image_generation', False)
     ]
 
     total_providers = len(chat_providers)
     
-    print(f"Найдено {len(all_known_providers)} провайдеров, из них {total_providers} являются текстовыми чатами (или неизвестного типа).")
+    print(f"Найдено {len(all_known_providers)} провайдеров. "
+          f"После фильтрации осталось {total_providers} текстовых чатов.")
     print(f"Начинаю проверку...")
     print(f"Запускаю проверку (до {CONCURRENT_LIMIT} одновременных запросов)...")
     print(f"Результаты будут записываться в '{OUTPUT_FILE}' по мере их поступления.\n")
     
-    # Если вдруг список оказался пуст, выходим
     if not total_providers:
         print("Не найдено ни одного подходящего провайдера для проверки.")
         return
