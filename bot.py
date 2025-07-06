@@ -20,12 +20,12 @@ COPY_CHANNELS = {
 
 # === Провайдеры
 fallback_providers = [
-    g4f.Provider.Blackbox,
+    g4f.Provider.AnyProvider,
+    g4f.Provider.Chatai,
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.OIVSCodeSer0501,
-    g4f.Provider.OIVSCodeSer2,
     g4f.Provider.Qwen_Qwen_2_5_Max,
-    g4f.Provider.PollinationsAI,
+    g4f.Provider.WeWordle,
     g4f.Provider.Yqcloud,
 ]
 
