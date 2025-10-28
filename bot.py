@@ -20,7 +20,6 @@ COPY_CHANNELS = {
 
 # === Провайдеры
 fallback_providers = [
-    g4f.Provider.AnyProvider,
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.OperaAria,
     g4f.Provider.Yqcloud,
