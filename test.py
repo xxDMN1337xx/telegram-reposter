@@ -4,74 +4,76 @@ import sys
 from g4f.client import AsyncClient
 
 # --- НАСТРОЙКИ ---
-CONCURRENT_LIMIT = 10  # Уменьшил для стабильности, 20 может вызывать баны по IP
-TEST_PROMPT = "Answer with one word: is a tomato red or purple?" # Лучше на английском, больше моделей поймут
+CONCURRENT_LIMIT = 15       # Количество потоков
+TEST_PROMPT = "Answer with one word: is a tomato red or purple?"
 OUTPUT_FILE = "good_chat_providers.txt"
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 25        # Таймаут чуть побольше для медленных
 # --- КОНЕЦ НАСТРОЕК ---
 
-# Установка кодировки для Windows/Linux
+# Настройка кодировки
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-# Инициализируем клиент один раз
+# Инициализируем клиент
 client = AsyncClient()
 
 async def test_provider(provider_cls, model_to_use: str):
     provider_name = provider_cls.__name__
     try:
-        # Использование нового клиента G4F (аналог OpenAI API)
+        # Пытаемся отправить запрос
         response = await client.chat.completions.create(
             model=model_to_use,
             messages=[{"role": "user", "content": TEST_PROMPT}],
             provider=provider_cls,
-            timeout=REQUEST_TIMEOUT # Таймаут может не поддерживаться клиентом напрямую, но оставим для совместимости
         )
         
-        # Получаем контент ответа
         if response and response.choices:
             content = response.choices[0].message.content
-            cleaned_response = content.strip().replace('\n', ' ').replace('\r', '') if content else None
-            return provider_name, cleaned_response
-            
+            if content:
+                # Очистка от лишних пробелов
+                return provider_name, content.strip()
         return provider_name, None
+
     except Exception:
-        # Ошибки здесь ожидаемы для нерабочих провайдеров
+        # Любая ошибка (сеть, не тот тип провайдера, бан) = провал
         return provider_name, None
 
 async def worker(provider, semaphore, file_handle, counters):
     async with semaphore:
-        # Логика выбора модели
+        # --- ЛОГИКА ВЫБОРА МОДЕЛИ ---
+        # Мы пытаемся угадать модель. Если у провайдера есть список - берем первую.
+        # Если нет - пробуем самые популярные стандарты, которые поддерживают почти все.
         model_list = getattr(provider, "models", [])
         
-        # Берем первую модель или дефолтную
         if model_list and isinstance(model_list, list) and len(model_list) > 0:
             model_to_use = model_list[0]
         else:
-            # Для многих провайдеров gpt-3.5 или gpt-4 являются дефолтными
-            model_to_use = "gpt-3.5-turbo"
+            model_to_use = "gpt-3.5-turbo" # Самый универсальный вариант
 
-        # Тестируем
+        # --- ТЕСТ ---
+        provider_name = provider.__name__
+        response = None
+        
         try:
-            # Обернем в wait_for для жесткого контроля таймаута (так как клиент может зависать)
+            # Жесткий таймаут снаружи, чтобы не зависать на "мертвых" провайдерах
             provider_name, response = await asyncio.wait_for(
                 test_provider(provider, model_to_use), 
-                timeout=REQUEST_TIMEOUT + 5
+                timeout=REQUEST_TIMEOUT
             )
-        except asyncio.TimeoutError:
-            provider_name, response = provider.__name__, None
         except Exception:
-            provider_name, response = provider.__name__, None
+            # Игнорируем ошибки таймаута и прочие
+            pass
 
         counters['completed'] += 1
-        
-        # Логика вывода и сохранения
+
+        # --- ПРОВЕРКА РЕЗУЛЬТАТА ---
         if response:
-            counters['successful'] += 1
-            # Простая проверка на адекватность (слово Red или красный)
-            is_valid = len(response) < 100 # Просто чтоб не сохранять ошибки html 
-            
-            if is_valid:
+            # Простейшая проверка: ответ должен быть коротким (так как мы просили одно слово)
+            # и не содержать явного HTML мусора
+            if len(response) < 300 and "<!DOCTYPE" not in response:
+                counters['successful'] += 1
+                
+                # Запись в файл
                 result_str = (
                     f"Provider: {provider_name}\n"
                     f"Model: {model_to_use}\n"
@@ -81,68 +83,49 @@ async def worker(provider, semaphore, file_handle, counters):
                 file_handle.write(result_str)
                 file_handle.flush()
                 
+                # Вывод в консоль (зеленым цветом, если поддерживает терминал, или просто текстом)
                 print(f"{' ' * 100}\r", end="")
-                print(f"[+] GOOD: {provider_name:<20} | Model: {model_to_use:<15} | Ans: {response[:30]}")
-        
-        # Обновление статус-бара
-        total = counters['total']
-        current = counters['completed']
-        success = counters['successful']
-        print(f"Progress: {current}/{total} | Working: {success}", end='\r', flush=True)
+                print(f"[+] НАЙДЕН: {provider_name:<25} | Ответ: {response[:40]}")
+
+        # Обновление прогресса
+        print(f"Обработано: {counters['completed']}/{counters['total']} | Найдено рабочих: {counters['successful']}", end='\r', flush=True)
 
 async def main():
-    # 1. Сбор провайдеров
-    # В новых версиях лучше брать из __providers__ если есть, или фильтровать __map__
+    # 1. Получаем ВСЕХ провайдеров без разбора
     if hasattr(g4f.Provider, '__providers__'):
-         all_providers = g4f.Provider.__providers__
+         all_raw_providers = g4f.Provider.__providers__
     else:
-         all_providers = list(g4f.Provider.__map__.values())
+         all_raw_providers = list(g4f.Provider.__map__.values())
 
-    # 2. Фильтрация
-    chat_providers = []
-    ignored_names = [
-        "GoogleSearch", "BingCreateImages", "GeminiPro", "OpenaiChat", 
-        "NeedsAuth", "BaseProvider", "AsyncProvider", "AsyncGeneratorProvider"
-    ]
+    providers_to_test = []
     
-    for p in all_providers:
-        if not p: continue
-        name = p.__name__
-        
-        # Пропускаем служебные классы и явно не чат-провайдеры
-        if name in ignored_names:
-            continue
-        if getattr(p, 'working', False) is False: # Если провайдер помечен как нерабочий в g4f
-            continue
-        if getattr(p, 'needs_auth', False): # Пропускаем те, что требуют авторизации (cookies)
-            continue
-        if getattr(p, 'supports_image_generation', False): # Пропускаем генераторы картинок
-            continue
-            
-        chat_providers.append(p)
+    # Исключаем только технические базовые классы, которые нельзя запустить
+    technical_classes = ["BaseProvider", "AsyncProvider", "AsyncGeneratorProvider", "ProviderUtils"]
+
+    for p in all_raw_providers:
+        if p and p.__name__ not in technical_classes:
+            providers_to_test.append(p)
 
     # Удаляем дубликаты
-    chat_providers = list(set(chat_providers))
-    total_providers = len(chat_providers)
-    
-    print(f"Providers found: {len(all_providers)}")
-    print(f"Providers to test (Text Only): {total_providers}")
-    print(f"Output file: {OUTPUT_FILE}\n")
-    
-    if not total_providers:
-        print("No providers found to test.")
-        return
+    providers_to_test = list(set(providers_to_test))
+    total = len(providers_to_test)
+
+    print(f"Всего загружено провайдеров из g4f: {total}")
+    print("Запускаю режим полной проверки (без фильтров).")
+    print("В консоли могут появляться ошибки от нетекстовых провайдеров - это нормально.")
+    print("-" * 50)
 
     semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
-    counters = {'completed': 0, 'successful': 0, 'total': total_providers}
-    
+    counters = {'completed': 0, 'successful': 0, 'total': total}
+
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(f"--- Scan Start ---\n\n")
-        tasks = [worker(p, semaphore, f, counters) for p in chat_providers]
+        f.write(f"--- FULL SCAN RESULT ---\n\n")
+        tasks = [worker(p, semaphore, f, counters) for p in providers_to_test]
         await asyncio.gather(*tasks)
 
     print("\n\n" + "="*50)
-    print(f"Done! Working providers: {counters['successful']}")
+    print(f"Готово. Рабочих провайдеров: {counters['successful']}")
+    print(f"Результат сохранен в: {OUTPUT_FILE}")
     print("="*50)
 
 if __name__ == "__main__":
@@ -152,4 +135,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        print("\nОстановлено пользователем.")
