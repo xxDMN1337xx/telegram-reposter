@@ -23,6 +23,8 @@ fallback_providers = [
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.OperaAria,
     g4f.Provider.Yqcloud,
+    g4f.Provider.WeWordle,
+    g4f.Provider.PollinationsAI
 ]
 
 # === Очистка текста
