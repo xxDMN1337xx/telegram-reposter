@@ -22,10 +22,9 @@ COPY_CHANNELS = {
 fallback_providers = [
     g4f.Provider.CohereForAI_C4AI_Command,
     g4f.Provider.Yqcloud,
-    g4f.Provider.WeWordle,
     g4f.Provider.OperaAria,
-    g4f.Provider.AnyProvider,
-    g4f.Provider.BAAI_Ling
+    g4f.Provider.GradientNetwork,
+    g4f.Provider.Startnest
 ]
 
 # === Очистка текста
