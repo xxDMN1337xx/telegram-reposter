@@ -1,7 +1,7 @@
 import asyncio
 import os
 import re
-import pymorphy2
+import pymorphy3
 import g4f
 from telethon import TelegramClient, events
 from telethon.tl.types import Message
@@ -32,9 +32,9 @@ def sanitize_input(text):
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
 
-# === Лемматизация
+# === Лемматизация (Использует pymorphy3)
 filter_words = set()
-morph = pymorphy2.MorphAnalyzer(lang='ru')
+morph = pymorphy3.MorphAnalyzer(lang='ru')
 
 def load_filter_words():
     global filter_words
@@ -217,10 +217,14 @@ async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
-    @client.on(events.NewMessage(incoming=True))
+    # Ограничиваем отслеживание только теми ID, которые есть в COPY_CHANNELS
+    target_chats = list(COPY_CHANNELS.keys())
+
+    @client.on(events.NewMessage(incoming=True, chats=target_chats))
     async def handler(event):
         await handle_message(event, client)
 
+    print("[SYSTEM] Юзербот запущен и отслеживает только целевые каналы.")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
