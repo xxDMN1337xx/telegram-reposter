@@ -13,7 +13,7 @@ CHANNEL_TRASH = 'https://t.me/musoradsxx'
 
 # === Источники с копированием (channel_id: ссылка)
 COPY_CHANNELS = {
-    1672980976: "https://t.me/piratecpa",      # piratecpa, piratcpa, arbitrazh_traffika, web3traff
+    1672980976: "https://t.me/piratecpa",
     2530485449: "https://t.me/huihuihui111111111111",
     2101853050: "https://t.me/sapogcpa"
 }
@@ -32,7 +32,7 @@ def sanitize_input(text):
     text = re.sub(r'[^\wа-яА-ЯёЁ.,:;!?%()\-–—\n ]+', '', text)
     return text.strip()[:2000]
 
-# === Лемматизация (Использует pymorphy3)
+# === Лемматизация (pymorphy3)
 filter_words = set()
 morph = pymorphy3.MorphAnalyzer(lang='ru')
 
@@ -78,7 +78,6 @@ async def check_with_gpt(text: str, client) -> str:
         "Output ONLY one Russian word: 'полезно', 'бесполезно', or 'реклама'."
     )
 
-    results = []
     total = len(fallback_providers)
 
     async def call_provider(provider, index):
@@ -137,7 +136,7 @@ async def check_with_gpt(text: str, client) -> str:
 async def handle_message(event, client):
     load_filter_words()
 
-    # === Только каналы (не обрабатываем чаты и группы)
+    # Только каналы (не чаты и не группы)
     if not event.is_channel or event.chat is None or not getattr(event.chat, 'broadcast', False):
         return
 
@@ -164,7 +163,7 @@ async def handle_message(event, client):
                 messages_to_forward.append(msg)
     messages_to_forward.sort(key=lambda m: m.id)
 
-    # === Определение источника
+    # Определение источника
     original_channel_id = None
     source_url = None
 
@@ -217,14 +216,12 @@ async def main():
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
-    # Ограничиваем отслеживание только теми ID, которые есть в COPY_CHANNELS
-    target_chats = list(COPY_CHANNELS.keys())
-
-    @client.on(events.NewMessage(incoming=True, chats=target_chats))
+    # ИСПРАВЛЕНО: слушаем ВСЕ входящие — иначе форвард из каналов вне COPY_CHANNELS не работает
+    @client.on(events.NewMessage(incoming=True))
     async def handler(event):
         await handle_message(event, client)
 
-    print("[SYSTEM] Юзербот запущен и отслеживает только целевые каналы.")
+    print("[SYSTEM] Юзербот запущен и отслеживает все каналы.")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
